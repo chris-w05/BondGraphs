@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import math
+import random
 import re
 import sys
 from dataclasses import dataclass, field
@@ -12,8 +14,18 @@ from pathlib import Path
 
 try:
     import sympy as sp
+    from sympy.core.function import AppliedUndef
 except ImportError:  # helpful instead of a traceback for a fresh checkout
     sys.exit("This program needs SymPy. Run: python3 -m pip install -r requirements.txt")
+
+
+# Law keys per element kind. The first is the default: a coefficient (R, C, I, n)
+# or a source value. R, C and I can instead give the law as a function, keyed by
+# the variable it sets: R e=phi(f) or f=phi(e); C e=phi(q) or q=phi(e); I f=phi(p)
+# or p=phi(f). Inside any R, C or I law, e, f, q and p are the element's own
+# effort, inflow and state.
+LAW_FORMS = {"R": ("R", "e", "f"), "C": ("C", "e", "q"), "I": ("I", "f", "p"),
+             "SE": ("value",), "SF": ("value",), "TF": ("n",), "GY": ("n",)}
 
 
 @dataclass
@@ -32,10 +44,14 @@ class Model:
 
 
 def parse(path: str) -> Model:
+    return parse_text(Path(path).read_text())
+
+
+def parse_text(text: str) -> Model:
     m = Model()
     pending: list[tuple[str, list[tuple[str, int]]]] = []
     connects: list[tuple[str, str, str]] = []
-    for number, raw in enumerate(Path(path).read_text().splitlines(), 1):
+    for number, raw in enumerate(text.splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
@@ -65,6 +81,14 @@ def parse(path: str) -> Model:
                     raise ValueError(f"line {number}: expected key=value, got {word!r}")
                 key, value = word.split("=", 1)
                 params[key] = value
+            forms = LAW_FORMS[kind.upper()]
+            allowed = forms + (("causality",) if kind.upper() == "R" else ())
+            unknown = [key for key in params if key not in allowed]
+            if unknown:
+                raise ValueError(f"line {number}: {kind} takes {', '.join(k + '=' for k in allowed)} not {unknown[0]}=")
+            given = [key for key in forms if key in params]
+            if len(given) > 1:
+                raise ValueError(f"line {number}: {name} has two laws ({given[0]}= and {given[1]}=); give one")
             m.elements[name] = Element(name, kind, params)
         elif cm:
             connects.append(cm.groups())
@@ -157,21 +181,29 @@ def causality(m: Model):
     return best
 
 
-def sym(value: str):
+def sym(value: str, own: dict | None = None):
     # Give names used like u(t) function semantics; all other undeclared names
     # remain symbolic parameters, which is convenient for R, C, I, and n.
     # SymPy functions (Piecewise, Abs, Max, sin, sqrt, ...) keep their meaning.
+    # `own` binds an element's own e, f, q, p inside its law.
     functions = {
         name: sp.Function(name)
         for name in re.findall(r"\b([A-Za-z_]\w*)\s*\(", value)
         if name not in {"t", "sqrt"} and not isinstance(getattr(sp, name, None), sp.FunctionClass)
     }
-    return sp.sympify(value.replace("^", "**"), locals={"t": sp.Symbol("t"), **functions})
+    return sp.sympify(value.replace("^", "**"), locals={"t": sp.Symbol("t"), **(own or {}), **functions})
 
 
-def derive(m: Model, c):
+def derive(m: Model, c, inputs: dict | None = None):
+    """Return states, their derivatives, the full equations and the solution (None if unsolved).
+
+    Source values that don't depend on the system are solved as input symbols.
+    Pass a dict as `inputs` to get derivatives in terms of those symbols (it's
+    filled with symbol -> (source name, value)); otherwise the values are put back.
+    """
     e, f, fin = {}, {}, {}
     equations, states, dots = [], [], []
+    given: dict = {}
     for el in m.elements.values():
         for p, (_, sign) in enumerate(el.ports, 1):
             suffix = port_name(el.name, p)
@@ -189,22 +221,30 @@ def derive(m: Model, c):
         summed = sum(sign * (f[n, p] if kind == "0" else e[n, p]) for n, p, sign in a)
         equations.append(summed)
     # Element laws and storage state equations
+    system = set(e.values()) | set(f.values()) | {
+        sp.Symbol(("q_" if el.kind.upper() == "C" else "p_") + el.name)
+        for el in m.elements.values() if el.kind.upper() in {"C", "I"}}
     for el in m.elements.values():
         k = el.kind.upper(); key = (el.name, 1)
-        if k == "I":
-            I = sym(el.params.get("I", "I_" + el.name)); p = sp.Symbol("p_" + el.name)
-            equations.append(fin[key] - p / I)
-            if c[key] == "f":
-                states.append(p); dots.append(e[key])
-        elif k == "C":
-            C = sym(el.params.get("C", "C_" + el.name)); q = sp.Symbol("q_" + el.name)
-            equations.append(e[key] - q / C)
-            if c[key] == "e":
-                states.append(q); dots.append(fin[key])
-        elif k == "R":
-            R = sym(el.params.get("R", "R_" + el.name)); equations.append(e[key] - R * fin[key])
-        elif k == "SE": equations.append(e[key] - sym(el.params.get("value", "u_" + el.name)))
-        elif k == "SF": equations.append(-fin[key] - sym(el.params.get("value", "u_" + el.name)))  # flow delivered
+        if k in {"R", "C", "I"}:
+            form = next((f for f in LAW_FORMS[k] if f in el.params), k)
+            own = {"e": e[key], "f": fin[key]}
+            if k != "R":
+                state = sp.Symbol(("q_" if k == "C" else "p_") + el.name)
+                own["q" if k == "C" else "p"] = state
+            law = sym(el.params.get(form, f"{k}_{el.name}"), own)
+            if form != k: equations.append(own[form] - law)  # e=, f=, q= or p=: the law itself
+            elif k == "R": equations.append(e[key] - law * fin[key])
+            elif k == "C": equations.append(e[key] - state / law)
+            else: equations.append(fin[key] - state / law)
+            if k != "R" and (k, c[key]) in {("C", "e"), ("I", "f")}:
+                states.append(state); dots.append(fin[key] if k == "C" else e[key])
+        elif k in {"SE", "SF"}:
+            value = sym(el.params.get("value", "u_" + el.name))
+            if not value.free_symbols & system:  # an input, not a modulated source
+                given[sp.Dummy("u_" + el.name)] = (el.name, value)
+                value = list(given)[-1]
+            equations.append((e[key] if k == "SE" else -fin[key]) - value)  # Sf: flow delivered
         # Two-ports: power enters port 1 and leaves port 2 (f2 out = -fin[2]).
         elif k == "TF":
             n = sym(el.params.get("n", "n_" + el.name)); equations += [e[el.name,1] - n*e[el.name,2], -fin[el.name,2] - n*fin[el.name,1]]
@@ -213,22 +253,173 @@ def derive(m: Model, c):
     variables = list(e.values()) + list(f.values())
     # Piecewise element laws (check valves, piecewise resistors) are still linear in
     # the unknowns, but sp.solve evaluates their conditions during elimination and
-    # can collapse to 0/0 -> nan. Swap each for a placeholder, solve, then put it back.
+    # can collapse to 0/0 -> nan, and it can't solve through Abs or sign at all.
+    # Swap each for a placeholder, solve, then put it back.
     placeholders: dict[sp.Expr, sp.Expr] = {}
 
     def linearize(eq):
-        for pw in eq.atoms(sp.Piecewise):
-            placeholders.setdefault(pw, sp.Dummy(f"Piecewise{len(placeholders)}"))
+        for pw in eq.atoms(sp.Piecewise, sp.Abs, sp.sign, sp.Heaviside, sp.Max, sp.Min):
+            placeholders.setdefault(pw, sp.Dummy(f"Switch{len(placeholders)}"))
         return eq.xreplace(placeholders)
 
-    solution = sp.solve([linearize(eq) for eq in equations], variables, dict=True, simplify=True)
-    if not solution:
+    try:
+        solutions = sp.solve([linearize(eq) for eq in equations], variables, dict=True, simplify=True)
+    except NotImplementedError:  # e.g. inverting e=a*f*Abs(f); report it as unsolved
+        solutions = []
+    values = {u: value for u, (_, value) in given.items()}
+    back = {} if inputs is not None else values
+    if inputs is not None:
+        inputs.update(given)
+    equations = [eq.xreplace(values) for eq in equations]
+    if not solutions:
         return states, dots, equations, None
-    sol = solution[0]
-    if placeholders:
-        restore = {dummy: pw for pw, dummy in placeholders.items()}
-        sol = {var: sp.simplify(val.xreplace(restore)) for var, val in sol.items()}
-    return states, [sp.simplify(x.subs(sol)) for x in dots], equations, sol
+    restore = {dummy: pw for pw, dummy in placeholders.items()}
+    unknowns = set(variables)
+    candidates = []
+    for sol in solutions:
+        sol = settle({var: val.xreplace(restore) for var, val in sol.items()}, unknowns)
+        result = [x.xreplace(sol) for x in dots]
+        solved = [r for r in result if not r.free_symbols & unknowns]
+        candidates.append((len(solved), solved, result, sol))
+    # Prefer the solution that eliminates the most unknowns. A law with several
+    # inverses (p=Psi*tanh(f/i0) solved for f) gives several solutions; then
+    # keep the first that's real wherever the others are.
+    count, _, result, sol = max(candidates, key=lambda cand: (cand[0], real_samples(cand[1])))
+    return states, [sp.simplify(r.xreplace(back)) for r in result], equations, sol if count == len(dots) else None
+
+
+def settle(sol: dict, unknowns: set) -> dict:
+    """Substitute solved unknowns into each other, as far as they resolve.
+
+    A restored placeholder can still mention unknowns: a diode
+    f=Piecewise((e/R_on,e>0),...) depends on its own e. Values that depend on an
+    unsolved unknown, or on themselves through a loop, are left as they are.
+    """
+    done: dict = {}  # var -> resolved value, or None when it can't be resolved
+
+    def resolve(var, path):
+        if var in path or var not in sol:
+            return None
+        if var not in done:
+            reps = {}
+            for u in sol[var].free_symbols & unknowns:
+                reps[u] = resolve(u, path | {var})
+                if reps[u] is None:  # every var on `path` depends on var, so this is a loop through var
+                    break
+            done[var] = None if None in reps.values() else sol[var].xreplace(reps)
+        return done[var]
+
+    resolved = {var: resolve(var, frozenset()) for var in sol}
+    return {var: val if resolved[var] is None else resolved[var] for var, val in sol.items()}
+
+
+def real_samples(exprs, count: int = 8) -> int:
+    """Count random points (every symbol and input in 0.1..1) where all exprs are real."""
+    rng = random.Random(0)
+    atoms = set().union(*(x.free_symbols | x.atoms(AppliedUndef) for x in exprs))
+    hits = 0
+    for _ in range(count):
+        point = {a: sp.Float(rng.uniform(0.1, 1)) for a in atoms}
+        try:
+            values = [complex(x.xreplace(point).evalf()) for x in exprs]
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        hits += all(math.isfinite(v.real) and abs(v.imag) < 1e-9 for v in values)
+    return hits
+
+
+def storage_causality(m: Model, integral: dict[str, bool]):
+    """Causality for derive() from which storage elements are in integral causality."""
+    c = {}
+    for el in m.elements.values():
+        if el.kind.upper() in {"C", "I"}:
+            wanted, other = ("e", "f") if el.kind.upper() == "C" else ("f", "e")
+            c[el.name, 1] = wanted if integral.get(el.name, True) else other
+    return c
+
+
+def state_space(states, dots, inputs):
+    """A, B, d with dots = A*x + B*u + d, or None if dots aren't linear in x and u."""
+    x, u, f = sp.Matrix(states), sp.Matrix(len(inputs), 1, list(inputs)), sp.Matrix(dots)
+    A = f.jacobian(x).applyfunc(sp.simplify)
+    B = f.jacobian(u).applyfunc(sp.simplify) if inputs else sp.zeros(len(dots), 0)
+    d = (f - A * x - B * u).applyfunc(sp.simplify)
+    if any(M.free_symbols & (set(states) | set(inputs)) for M in (A, B, d)):
+        return None
+    return A, B, d
+
+
+GREEK = set("alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi "
+            "pi rho sigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma "
+            "Upsilon Phi Psi Omega".split())
+
+
+def tex_name(name: str, dot: bool = False) -> str:
+    """LaTeX for a name: q_C1 -> q_{\\mathrm{C1}}, R_a -> R_{a}, F0 -> F_{0}, rho -> \\rho.
+
+    SymPy's own printer mangles some names (p_I_Electrical ends in "cal", which it
+    reads as \\mathcal), so every symbol goes through this instead.
+    """
+    base, _, sub = name.partition("_")
+    digits = re.fullmatch(r"([A-Za-z]+?)(\d+)", base)
+    if not sub and digits:
+        base, sub = digits.groups()
+    head = "\\" + base if base in GREEK else rf"\mathit{{{base}}}" if base.isalpha() and len(base) > 1 else base
+    if dot:
+        head = rf"\dot{{{head}}}"
+    if not sub:
+        return head
+    sub = sub if len(sub) == 1 or sub.isdigit() else r"\mathrm{%s}" % sub.replace("_", r"\_")
+    return f"{head}_{{{sub}}}"
+
+
+def tex(expr) -> str:
+    return sp.latex(expr, symbol_names={s: tex_name(s.name) for s in expr.free_symbols if isinstance(s, sp.Symbol)})
+
+
+def tex_column(items) -> str:
+    return r"\left[\begin{matrix}" + r" \\ ".join(items) + r"\end{matrix}\right]"
+
+
+def latex_report(m: Model, c) -> dict:
+    """The state equations as LaTeX, one per state and in matrix form, for --latex and the editor."""
+    given: dict = {}
+    states, dots, eqs, sol = derive(m, c, given)
+    values = {u: value for u, (_, value) in given.items()}
+    pairs = [(tex_name(str(x), dot=True), tex(d.xreplace(values))) for x, d in zip(states, dots)]
+    out = {
+        "states": [tex_name(str(x)) for x in states],
+        "equations": pairs,
+        "separate": "\\begin{aligned}\n" + " \\\\\n".join(f"{l} &= {r}" for l, r in pairs) + "\n\\end{aligned}",
+        "solved": sol is not None,
+        "full": [tex(eq) + " = 0" for eq in eqs],
+        "matrix": None, "linear": False, "inputs": [],
+    }
+    if not states or sol is None:
+        return out
+    # Each source becomes an entry of u: its value when that's a lone name or
+    # input like v(t), else u_<source> defined underneath.
+    shown = {u: value if isinstance(value, (sp.Symbol, AppliedUndef)) else sp.Symbol("u_" + src)
+             for u, (src, value) in given.items()}
+    columns = list(dict.fromkeys(shown.values()))  # two sources fed by one v(t) share a column
+    slot = {name: sp.Dummy() for name in columns}
+    split = state_space(states, [d.xreplace({u: slot[shown[u]] for u in given}) for d in dots], list(slot.values()))
+    lhs = tex_column(tex_name(str(x), dot=True) for x in states)
+    if split is None:
+        out["matrix"] = f"{lhs} = {tex(sp.Matrix([d.xreplace(values) for d in dots]))}"
+        return out
+    A, B, d = split
+    rhs = [f"{tex(A)} {tex_column(tex_name(str(x)) for x in states)}"]
+    if columns:
+        rhs.append(f"{tex(B)} {tex_column(tex(name) for name in columns)}")
+    if any(d):
+        rhs.append(tex(d))
+    inputs = [f"{tex(shown[u])} = {tex(value)}" for u, (_, value) in given.items() if shown[u] != value]
+    matrix = f"{lhs} = " + " + ".join(rhs)
+    if inputs:
+        matrix = f"\\begin{{gathered}}\n{matrix} \\\\\n\\text{{where }} " + ",\\quad ".join(inputs) + "\n\\end{gathered}"
+    out.update(matrix=matrix, linear=True, inputs=inputs)
+    return out
 
 
 def main():
@@ -236,9 +427,20 @@ def main():
     ap.add_argument("file", help="input .bond file")
     ap.add_argument("--show-equations", action="store_true")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--latex", nargs="?", const="equations", choices=["equations", "matrix"],
+                    help="print the state equations as LaTeX, one per state or in matrix form")
     args = ap.parse_args()
     try:
-        m = parse(args.file); c = causality(m); states, dots, eqs, sol = derive(m, c)
+        m = parse(args.file); c = causality(m)
+        if args.latex:
+            latex = latex_report(m, c)
+            if args.json:
+                print(json.dumps(latex, indent=2)); return
+            print(latex["separate"] if args.latex == "equations" else latex["matrix"] or latex["separate"])
+            if not latex["solved"]:
+                sys.exit("Unable to eliminate algebraic variables; run without --latex for the full equations.")
+            return
+        states, dots, eqs, sol = derive(m, c)
     except (OSError, ValueError, sp.SympifyError) as exc:
         sys.exit(f"Error: {exc}")
     report = {"causality": {f"{n}.{p}": v for (n,p),v in c.items()}, "states": [str(x) for x in states], "state_equations": [f"d({x})/dt = {y}" for x,y in zip(states,dots)]}

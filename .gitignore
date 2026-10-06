@@ -1,0 +1,7 @@
+.github
+.venv
+__pycache__
+.vscode
+.pytest_cache
+__pycache__/*.pyc f
+

@@ -8,6 +8,8 @@ causality on storage elements), and derives symbolic state equations.
 python3 bondgraph.py model.bond                  # causality, states, state equations
 python3 bondgraph.py model.bond --show-equations # also print every junction/element equation
 python3 bondgraph.py model.bond --json           # machine-readable output
+python3 bondgraph.py model.bond --latex          # state equations as LaTeX, one per state
+python3 bondgraph.py model.bond --latex=matrix   # ... or as x' = A x + B u
 ```
 
 Contents:
@@ -107,9 +109,9 @@ contain spaces** (`R=R0*(1+a*q_C1)`, not `R = R0 * (1 + a*q_C1)`).
 
 | Kind | Law used by the tool | Parameter | Default if omitted | State |
 |------|----------------------|-----------|--------------------|-------|
-| `I`  | `f_in = p / I`, `dp/dt = e` | `I=` | `I_<name>` | `p_<name>` (momentum) |
-| `C`  | `e = q / C`, `dq/dt = f_in` | `C=` | `C_<name>` | `q_<name>` (displacement) |
-| `R`  | `e = R * f_in` | `R=`, optional `causality=` | `R_<name>` | none |
+| `I`  | `f_in = p / I`, `dp/dt = e` | `I=`, or `f=` / `p=` | `I_<name>` | `p_<name>` (momentum) |
+| `C`  | `e = q / C`, `dq/dt = f_in` | `C=`, or `e=` / `q=` | `C_<name>` | `q_<name>` (displacement) |
+| `R`  | `e = R * f_in` | `R=`, or `e=` / `f=`; optional `causality=` | `R_<name>` | none |
 | `Se` | `e = value` | `value=` | `u_<name>` | none |
 | `Sf` | `f_out = value` (flow delivered) | `value=` | `u_<name>` | none |
 | `TF` | `e1 = n*e2`, `f2 = n*f1` | `n=` | `n_<name>` | none |
@@ -132,6 +134,43 @@ element D   R  R=R_d causality=flow
 
 `causality=effort` or `causality=flow` on an `R` forces it to impose that
 variable on its junction (see [Causality](#8-causality)).
+
+### Laws as functions
+
+`R=`, `C=` and `I=` give a coefficient, so the law is linear in it. To give
+any law instead, name the variable it sets. Use one key per element.
+
+| Kind | Key | Law | Natural causality |
+|------|-----|-----|-------------------|
+| `R` | `e=` | `e = φ(f)` | sets effort (it is given the flow) |
+| `R` | `f=` | `f_in = φ(e)` | sets flow (it is given the effort) |
+| `C` | `e=` | `e = φ(q)` | integral |
+| `C` | `q=` | `q = φ(e)` | derivative |
+| `I` | `f=` | `f_in = φ(p)` | integral |
+| `I` | `p=` | `p = φ(f_in)` | derivative |
+
+Inside any `R`, `C` or `I` law, these names mean the element's own variables:
+
+| Name | Meaning |
+|------|---------|
+| `e` | its effort |
+| `f` | the flow into it (`f_in`), whichever way its bond points |
+| `q` | its displacement (`C` only), the same as `q_<name>` |
+| `p` | its momentum (`I` only), the same as `p_<name>` |
+
+```text
+element b  R  e=c*f*Abs(f)                           # quadratic damper / orifice
+element D  R  f=Piecewise((e/R_on,e>0),(0,True))     # ideal-ish diode
+element D2 R  f=I_s*(exp(e/V_T)-1)                   # Shockley diode
+element k  C  e=k*q+k3*q**3                          # hardening spring
+element L  I  p=Psi*tanh(f/i0)                       # saturating inductor
+```
+
+The law form doesn't constrain causality. When the graph gives an element the
+other causality, the tool solves the law for the variable it needs (see
+[what works well](#what-works-well-and-what-doesnt)). Because of that, prefer
+`f` over `f_<name>` inside an element's own law: `f_<name>` follows the bond's
+half-arrow, so flipping the arrow would flip its sign.
 
 ## 4. Two-ports: TF and GY
 
@@ -209,6 +248,10 @@ parameter names**:
 `Q(t)` *with* parentheses is fine: it becomes an input function. Only the bare
 names are a problem.
 
+Inside an `R`, `C` or `I` law, `e`, `f`, `q` and `p` are that element's own
+variables ([Laws as functions](#laws-as-functions)), so they can't be used as
+parameter names there.
+
 ## 6. Modulated elements
 
 Any parameter can depend on **states**, **inputs**, **time**, or **bond
@@ -220,6 +263,7 @@ need no special syntax.
 | State of `C` element `X` | `q_X` |
 | State of `I` element `X` | `p_X` |
 | Effort / flow on one-port `X` | `e_X` / `f_X` (`f_X` along the bond's half-arrow) |
+| The element's own effort / inflow / state, inside an `R`, `C` or `I` law | `e` / `f` / `q` or `p` |
 | Effort / flow on port 2 of two-port `X` | `e_X_2` / `f_X_2` |
 | Input | any `name(t)` |
 
@@ -265,9 +309,9 @@ step or sign behavior.
 
 ### What works well and what doesn't
 
-The element laws stay in the forms in the [Elements](#3-elements) table. A
-piecewise or nonlinear expression is the **coefficient** (`R`, `C`, `I`, `n`)
-or the **source value**. It can't replace the law itself.
+A piecewise or nonlinear expression can be a **coefficient** (`R`, `C`, `I`,
+`n`), a **source value**, or, for `R`, `C` and `I`, the **whole law**
+([Laws as functions](#laws-as-functions)).
 
 - **Works well:** conditions on **states, inputs and time** (`q_*`, `p_*`,
   `u(t)`, `t`). The solver treats them as known, and the result is a
@@ -278,18 +322,31 @@ or the **source value**. It can't replace the law itself.
                            (Q(t) - g*q_Tank*rho/(A*R_high), True))
   ```
 
-- **Usually fails:** conditions on the element's **own bond variables** (for
-  example a diode written as `R=Piecewise((R_on,f_D>0),(R_off,True))`). SymPy
-  generally can't invert such a law, so the tool prints "Unable to eliminate
-  algebraic variables" and the full equations. Those equations are still
-  correct, so you can finish the reduction by hand. Alternatives:
-  - **Smooth approximation:** replace the switch with a smooth function, e.g.
-    `R=R_off+(R_on-R_off)*(1+tanh(f_D/eps))/2`. SymPy may still not solve it
-    in closed form.
+- **Works well:** a law on the element's **own variables**, written for the
+  causality it ends up in. A diode the graph gives an effort is written
+  `f=Piecewise((e/R_on,e>0),(0,True))`, and its state equation comes out
+  explicit.
+
+- **Usually fails:** a `Piecewise`, `Abs` or `sign` law that has to be
+  **inverted** for the causality it ends up in (the same diode where the graph
+  gives it a flow, or `R=Piecewise((R_on,f>0),(R_off,True))`, which hides the
+  flow inside the coefficient). SymPy can't invert these, so the tool prints
+  the equations it could reduce, then "Unable to eliminate algebraic
+  variables" and the full equations. Those are still correct, so you can
+  finish the reduction by hand. Smooth laws such as `exp` or `tanh` are often
+  inverted fine. If one has several inverses, the tool keeps the one that's
+  real. Alternatives:
+  - **Write the law the other way round:** `e=` instead of `f=`, or
+    the reverse.
   - **Condition on a state:** rewrite the condition in terms of a state that
     determines the same switch.
   - **One mode per file:** analyze each mode in its own file with a constant
     `R`.
+
+The [editor](../ui/index.html) solves every law numerically, so it simulates
+laws in either direction. The exception is a law whose slope is infinite at
+the starting point, such as `f=sign(e)*sqrt(Abs(e)/a)` at `e=0`. Its solver
+can't start there; write it as `e=a*f*Abs(f)` instead.
 
 ## 8. Causality
 
@@ -305,7 +362,8 @@ The tool assigns causality automatically.
   effort.
 - **Resistors:** an `R` takes whatever the rest of the graph leaves it, unless
   you fix it with `causality=effort` or `causality=flow`. Use this when its
-  law can only be solved one way.
+  law can only be solved one way. Writing the law as `e=` or `f=` doesn't fix
+  the causality on its own.
 
 A storage element left in **derivative causality** is reported in the
 causality list and left out of the state vector.
@@ -326,7 +384,7 @@ States: p_La, p_J
 
 State equations:
   d(p_La)/dt = v(t) - R_a*p_La/L_a - K_t*p_J/J
-  d(p_J)/dt = -K_t*p_La/L_a - b*p_J/J
+  d(p_J)/dt = K_t*p_La/L_a - b*p_J/J
 ```
 
 - **Causality:** what each port imposes on its junction. For `I` and `C`
@@ -338,12 +396,37 @@ State equations:
   system. The full equations (each `= 0`) follow so you can see what's left.
   `--show-equations` always prints them.
 
+### LaTeX and matrix form
+
+`--latex` prints the same state equations as a LaTeX `aligned` block.
+`--latex=matrix` prints them as `ẋ = A x + B u`:
+
+```text
+\left[\begin{matrix}\dot{p}_{\mathrm{La}} \\ \dot{p}_{J}\end{matrix}\right] = \left[\begin{matrix}- \frac{R_{a}}{L_{a}} & - \frac{K_{t}}{J}\\\frac{K_{t}}{L_{a}} & - \frac{b}{J}\end{matrix}\right] \left[\begin{matrix}p_{\mathrm{La}} \\ p_{J}\end{matrix}\right] + \left[\begin{matrix}1\\0\end{matrix}\right] \left[\begin{matrix}v{\left(t \right)}\end{matrix}\right]
+```
+
+- **Inputs:** `u` has one entry per `Se`/`Sf`. When a source's value is a
+  single name or input, such as `v(t)` or `Q_in`, that's the entry; otherwise
+  it's `u_<source>`, defined under the matrices ("where `u_F = F_0 θ(t − 0.5)`").
+  A source whose value depends on a state or bond variable is part of the
+  dynamics, not an input.
+- **Nonlinear models:** if the equations aren't linear in the states and inputs
+  (a state-switched `Piecewise`, `q**3`, ...), there's no `A` and `B`, and the
+  matrix form is the vector `ẋ = f(x, u)`.
+- **Names:** a one-letter subscript stays italic (`R_a` → R<sub>a</sub>) and a
+  longer one is upright (`q_C1` → q<sub>C1</sub>, `R_on` → R<sub>on</sub>).
+  Greek names (`rho`, `omega_n`) become Greek letters.
+
+The [editor](../ui/index.html)'s **Equations** window shows the same output.
+
 ## 10. Errors and troubleshooting
 
 | Message | Cause / fix |
 |---------|-------------|
 | `line N: expected junction, element, or connect` | Typo in a keyword, or a missing `:` after the junction type. |
 | `line N: expected key=value, got '...'` | A space inside an expression. Remove it. |
+| `line N: R takes R=, e=, f=, causality= not X=` | A key that this kind of element doesn't have; see the [Elements](#3-elements) tables. |
+| `line N: X has two laws (R= and f=); give one` | An element was given its law twice. Keep one form. |
 | `line N: bad attachment '...'` | Junction member isn't `Name`, `Name.1`/`Name.2`, optionally followed by `+`/`-`. |
 | `junction J: unknown element X` | `X` is attached but never declared with `element`. |
 | `two-port X needs .1 or .2` | A TF/GY is attached in a junction list without a port. |
@@ -363,9 +446,10 @@ State equations:
 junction <name> 0: A+, B-, T.1+       # 0: common effort, signed flows sum to 0
 junction <name> 1: C+, T.2-           # 1: common flow, signed efforts sum to 0
 
-element <name> I  I=<expr>            # state p_<name>
-element <name> C  C=<expr>            # state q_<name>
-element <name> R  R=<expr> [causality=effort|flow]
+element <name> I  I=<expr>            # state p_<name>; or f=φ(p) / p=φ(f)
+element <name> C  C=<expr>            # state q_<name>; or e=φ(q) / q=φ(e)
+element <name> R  R=<expr> [causality=effort|flow]   # or e=φ(f) / f=φ(e)
+                                      # in R, C, I laws: e, f, q, p are its own variables
 element <name> Se value=<expr>
 element <name> Sf value=<expr>
 element <name> TF n=<expr>            # e1 = n e2,  f2 = n f1  (power in at 1, out at 2)

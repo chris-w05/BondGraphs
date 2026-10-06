@@ -12,7 +12,9 @@ python3 bondgraph.py examples/rc.bond
 ```
 
 Use `--json` for machine-readable output.  `--show-equations` also prints the
-complete constitutive/junction system used to obtain the result.
+complete constitutive/junction system used to obtain the result.  `--latex`
+prints the state equations as LaTeX, one per state; `--latex=matrix` prints
+them as `ẋ = A x + B u`, with each source's value as an entry of `u`.
 
 ## Editor
 
@@ -28,16 +30,31 @@ needed) to draw a bond graph instead of typing it:
   (`d/dt`), and causal conflicts are red.
 - **Laws:** click any node to set its constitutive law.  Laws use the same
   SymPy-style expressions as `.bond` files, including `Piecewise` and state
-  references like `q_C1`.  Common laws (diode, orifice, hardening spring...)
+  references like `q_C1`.  For `R`, `C` and `I`, **Law form** switches between
+  the linear coefficient and the law as a function either way round (`e = φ(f)`
+  or `f = φ(e)` for `R`).  Common laws (diode, orifice, hardening spring...)
   are one click away.
 - **Simulation:** the right pane plots every state over time and re-runs on each
   change.  It also lists parameters, inputs and initial conditions to edit.
   It uses an implicit BDF2 solver, so stiff models and derivative causality
   work too.
+- **Equations:** the **Equations** button opens a window with the solved
+  state equations, typeset, either one per state or in matrix form
+  (`ẋ = A x + B u`; a nonlinear model is shown as one vector).  **Copy LaTeX**
+  copies what it shows.  It runs this CLI's solver with SymPy inside the
+  browser (via [Pyodide](https://pyodide.org)), so it shows exactly what
+  `bondgraph.py --latex` prints, using the causality drawn in the editor.  The
+  first time it opens it downloads about 11 MB, so that needs an internet
+  connection; after that the browser's cache serves it.  Drag the window by
+  its title and resize it from its corner.
 - **Files:** **Export .bond** produces a file this CLI reads; **Import .bond**
   opens one (layout is kept in `#@` comment lines the CLI ignores).
 
-The engine's tests run with `node --test ui/engine.test.js`.
+The engine's tests run with `node --test ui/engine.test.js`.  The equations
+window runs an embedded copy of `bondgraph.py` (`ui/bondgraph-py.js`, since a
+page opened from disk can't read the `.py` file).  After changing
+`bondgraph.py`, run `node ui/embed-python.js` to refresh the copy; the engine
+tests fail until you do.
 
 ## `.bond` format
 
@@ -77,14 +94,18 @@ left right`; the two bonds are then attached automatically, with power flowing
 `left -> T -> right`.
 
 Parameters and source values are SymPy expressions.  For linear `R`, use
-`R=...`; for `I` and `C`, use `I=...` and `C=...`.  Arbitrary symbolic input
+`R=...`; for `I` and `C`, use `I=...` and `C=...`.  To give the law itself,
+name the variable it sets: `R` takes `e=φ(f)` or `f=φ(e)`, `C` takes `e=φ(q)`
+or `q=φ(e)`, and `I` takes `f=φ(p)` or `p=φ(f)`.  Inside these laws `e`, `f`,
+`q` and `p` are the element's own effort, inflow and state, e.g.
+`element D R f=Piecewise((e/R_on,e>0),(0,True))`.  Arbitrary symbolic input
 names such as `u(t)` are accepted, and SymPy functions such as `Piecewise`,
 `Abs`, `Max`, `sin` and `sqrt` keep their usual meaning.  Parameters may
 reference states (`q_C1`, `p_I1`) for modulated or piecewise laws, e.g.
 `R=Piecewise((R_low,q_Tank>V_max),(R_high,True))` (no spaces).
 For a non-invertible resistance, add `causality=effort` (it imposes effort) or
 `causality=flow` (it imposes flow).  The latter is appropriate for the diode
-example described in the notes.
+example described in the notes, written with `f=`.
 
 ### Conventions and scope
 

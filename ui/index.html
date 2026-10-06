@@ -263,7 +263,34 @@ table.data tr:nth-child(even) td { background: var(--bg); }
 .modal-card .row { justify-content: flex-end; flex-wrap: wrap; }
 .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--panel); padding: 8px 14px; border-radius: 8px; font-size: 13px; box-shadow: var(--shadow); max-width: calc(100% - 32px); }
 
+/* ---- equations window: floats over the workbench; drag by its header, resize from the corner */
+.btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.eqwin { position: fixed; z-index: 8; left: 24px; bottom: 24px; width: min(560px, calc(100vw - 32px));
+  min-width: 300px; min-height: 120px; max-width: calc(100vw - 16px); max-height: 70vh;
+  display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px;
+  box-shadow: var(--shadow); resize: both; overflow: hidden; }
+.eq-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--line);
+  cursor: move; user-select: none; touch-action: none; }
+.eq-head h2 { margin: 0 auto 0 0; font: 600 14px var(--font-display); white-space: nowrap; }
+.eq-head .x { order: 1; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; color: var(--muted); font-size: 17px; line-height: 1; }
+.eq-head .x:hover { background: var(--bg); color: var(--ink); }
+.eq-status { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
+.spin { flex: none; width: 12px; height: 12px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.eq-body { flex: 1; min-height: 0; overflow: auto; padding: 2px 14px 12px; color: var(--ink); transition: opacity .15s; }
+.eq-body.stale { opacity: .45; }
+.eq-body .katex-display { margin: 12px 0; }
+.eq-note { margin: 10px 0 0; font-size: 12.5px; color: var(--ink-2); }
+.eq-note.warn { color: var(--warn); }
+.eq-note.bad { color: var(--bad); }
+.eq-body details { margin-top: 10px; }
+.eq-body summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); }
+
 @media (max-width: 860px) {
+  .eqwin { left: 8px !important; right: 8px; top: auto !important; bottom: 8px; width: auto !important; height: auto !important; max-height: 55vh; resize: none; }
+  .eq-head { cursor: default; }
+  .eq-head h2 { flex: 1 0 calc(100% - 40px); }
+  .eq-head .x { order: 0; } /* stays beside the title; the controls wrap below */
   html, body { height: auto; }
   .app { height: auto; min-height: 100%; }
   .split { flex-direction: column; gap: 12px; }
@@ -274,7 +301,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   .tool-group + .tool-group { padding-left: 8px; }
   .toolbar { gap: 6px 8px; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } .spin { animation-duration: 3s; } }
 </style>
 
 <div class="app">
@@ -294,6 +321,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       <select class="btn" id="examples" aria-label="Load an example">
         <option value="">Load an example…</option>
       </select>
+      <button class="btn" id="btn-eq" type="button" aria-pressed="false" aria-controls="eqwin" title="Show the solved state equations">Equations</button>
       <button class="btn" id="btn-import" type="button">Import .bond</button>
       <button class="btn" id="btn-export" type="button">Export .bond</button>
       <button class="btn danger" id="btn-clear" type="button">Clear</button>
@@ -375,10 +403,26 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   </main>
 </div>
 
+<section class="eqwin" id="eqwin" hidden aria-label="State equations">
+  <div class="eq-head" id="eq-head">
+    <h2>State equations</h2>
+    <button class="x" type="button" id="eq-close" aria-label="Close the equations">×</button>
+    <div class="seg" role="group" aria-label="Layout">
+      <button type="button" data-eqmode="separate" aria-pressed="true">Separate</button>
+      <button type="button" data-eqmode="matrix" aria-pressed="false">Matrix</button>
+    </div>
+    <button class="btn small" type="button" id="eq-copy">Copy LaTeX</button>
+  </div>
+  <div class="eq-status" id="eq-status" hidden aria-live="polite"></div>
+  <div class="eq-body" id="eq-body"></div>
+</section>
+
 <div class="modal" id="modal" hidden><div class="modal-card" role="dialog" aria-modal="true" id="modal-card"></div></div>
 <div class="toast" id="toast" hidden role="status"></div>
 
 <script src="engine.js"></script>
+<script src="bondgraph-py.js"></script>
+<script src="equations.js"></script>
 <script>
 (() => {
   "use strict";
@@ -398,15 +442,27 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     "0": { title: "0-junction", desc: "Shared effort; flows sum to zero (parallel)." , key: "0" },
     "1": { title: "1-junction", desc: "Shared flow; efforts sum to zero (series).", key: "1" },
   };
+  // [label, law, form]; form is the law key when it isn't the coefficient.
   const TEMPLATES = {
-    C: [["Linear spring, stiffness k", "1/k_{n}"], ["Capacitor", "C_{n}"], ["Hardening spring", "1/(k_{n}+k3_{n}*q_{n}**2)"], ["Tank, area A", "A_{n}/(rho*g)"]],
-    I: [["Mass", "m_{n}"], ["Inductor", "L_{n}"], ["Rotational inertia", "J_{n}"], ["Fluid inertance", "rho*l_{n}/A_{n}"]],
-    R: [["Linear", "R_{n}"], ["Diode (switches on the flow)", "Piecewise((R_on,f_{n}>0),(R_off,True))"], ["Quadratic (orifice)", "a_{n}*Abs(f_{n})"], ["Coulomb friction, smoothed", "F_c/Max(Abs(f_{n}),eps)"]],
+    C: [["Linear spring, stiffness k", "1/k_{n}"], ["Capacitor", "C_{n}"], ["Hardening spring", "k_{n}*q+k3_{n}*q**3", "e"], ["Tank, area A", "A_{n}/(rho*g)"]],
+    I: [["Mass", "m_{n}"], ["Inductor", "L_{n}"], ["Rotational inertia", "J_{n}"], ["Fluid inertance", "rho*l_{n}/A_{n}"], ["Saturating inductor", "Psi_{n}*tanh(f/i_{n})", "p"]],
+    R: [["Linear", "R_{n}"], ["Diode", "Piecewise((e/R_on,e>0),(e/R_off,True))", "f"], ["Shockley diode", "I_s*(exp(e/V_T)-1)", "f"],
+      ["Orifice (quadratic)", "a_{n}*f*Abs(f)", "e"], ["Coulomb friction, smoothed", "F_c*tanh(f/eps)", "e"]],
     Se: [["Constant", "1"], ["Step at t0", "A*Heaviside(t-t0)"], ["Sine", "A*sin(w*t)"], ["Pulse t1 to t2", "A*(Heaviside(t-t1)-Heaviside(t-t2))"], ["Input u(t)", "u(t)"]],
     Sf: [["Constant", "1"], ["Step at t0", "A*Heaviside(t-t0)"], ["Sine", "A*sin(w*t)"], ["Pulse t1 to t2", "A*(Heaviside(t-t1)-Heaviside(t-t2))"], ["Input u(t)", "u(t)"]],
     TF: [["Constant ratio", "n_{n}"], ["Modulated by time", "r(t)"]],
     GY: [["Constant", "K_{n}"], ["Modulated by time", "r(t)"]],
   };
+  // Ways to write an R, C or I law: its coefficient, or the law itself as a
+  // function of the element's own variables.
+  const FORMS = {
+    R: [["R", "e = R·f"], ["e", "e = φ(f)"], ["f", "f = φ(e)"]],
+    C: [["C", "e = q/C"], ["e", "e = φ(q)"], ["q", "q = φ(e)"]],
+    I: [["I", "f = p/I"], ["f", "f = φ(p)"], ["p", "p = φ(f)"]],
+  };
+  // Each function form's linear law, in terms of the coefficient {c}.
+  const LINEAR = { R: { e: "{c}*f", f: "e/{c}" }, C: { e: "q/{c}", q: "{c}*e" }, I: { f: "p/{c}", p: "{c}*f" } };
+  const OWN_TITLES = { e: "this element's effort", f: "the flow into this element", q: "this element's displacement", p: "this element's momentum" };
 
   // ------------------------------------------------------------------ state
   let graph = { nodes: [], bonds: [] };
@@ -423,7 +479,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   const nodeById = (id) => graph.nodes.find((n) => n.id === id);
   const bondById = (id) => graph.bonds.find((b) => b.id === id);
   const isJ = (n) => n.kind === "0" || n.kind === "1";
-  const lawKey = (n) => BE.LAW_KEY[n.kind];
+  const lawKey = (n) => BE.lawKeyOf(n);
 
   // ------------------------------------------------------------------ persistence & history
   const snapshot = () => JSON.stringify({ graph, settings, plots, nextNode, nextBond });
@@ -591,7 +647,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     for (const m of graph.nodes) for (const k of Object.keys(m.law || {})) m.law[k] = sub(m.law[k]);
     // Carry default parameter names (C_C1 -> C_k) and their values along.
     const key = lawKey(n);
-    if (key && /^[A-Za-z]+$/.test(key)) {
+    if (key && key === BE.LAW_KEY[n.kind]) {
       const dflt = `${key === "value" ? "u" : key}_${old}`;
       if (n.law[key] === dflt) {
         const nd = `${key === "value" ? "u" : key}_${newName}`;
@@ -605,6 +661,36 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     plots.hidden = plots.hidden.map(sub); plots.extra = plots.extra.map(sub);
     n.name = newName;
     changed();
+    return "";
+  }
+
+  function setLaw(n, key, src) {
+    for (const k of BE.LAW_FORMS[n.kind] || []) delete n.law[k];
+    n.law[key] = src;
+  }
+  // Switch how an R, C or I law is written. A linear law carries over (R=b
+  // becomes e=b*f or f=e/b); anything else restarts from the default coefficient.
+  function switchForm(n, to) {
+    const from = lawKey(n), def = BE.LAW_KEY[n.kind];
+    if (from === to) return;
+    pushHistory();
+    const src = String(n.law[from] || "").trim();
+    const coef = (from === def ? src : coefficientOf(LINEAR[n.kind][from], src)) || `${def}_${n.name}`;
+    setLaw(n, to, to === def ? coef : LINEAR[n.kind][to].replace("{c}", /^[\w.]+$/.test(coef) ? coef : `(${coef})`));
+    changed(); buildPopover();
+  }
+  // The coefficient of a law written as `pattern` (like "e/{c}"), or "" if it isn't that law.
+  function coefficientOf(pattern, src) {
+    const [pre, post] = pattern.split("{c}");
+    if (!src.startsWith(pre) || !src.endsWith(post) || src.length <= pre.length + post.length) return "";
+    const c = src.slice(pre.length, src.length - post.length);
+    if (/^[\w.]+$/.test(c)) return c;
+    if (c[0] !== "(") return "";
+    let depth = 0;
+    for (let i = 0; i < c.length; i++) {
+      depth += c[i] === "(" ? 1 : c[i] === ")" ? -1 : 0;
+      if (depth === 0) return i === c.length - 1 ? c.slice(1, -1) : ""; // brackets must enclose all of it
+    }
     return "";
   }
 
@@ -825,33 +911,37 @@ table.data tr:nth-child(even) td { background: var(--bg); }
         onclick: () => { if (n.kind !== k) { pushHistory(); n.kind = k; changed(); buildPopover(); } } }, k === "0" ? "0 · shared effort" : "1 · shared flow"));
       pop.append(h("div", { class: "field" }, h("span", null, "Type"), seg));
     } else {
-      const key = lawKey(n);
+      const key = lawKey(n), label = key === BE.LAW_KEY[n.kind] ? info.lawLabel : key + " =";
+      if (FORMS[n.kind]) {
+        const seg = h("div", { class: "seg", role: "group", "aria-label": "Law form" });
+        FORMS[n.kind].forEach(([k, text]) => seg.append(h("button", { type: "button", "aria-pressed": String(key === k),
+          title: k === BE.LAW_KEY[n.kind] ? `Linear law; give ${k}` : `Give ${k} as a function`, onclick: () => switchForm(n, k) }, text)));
+        pop.append(h("div", { class: "field" }, h("span", null, "Law form"), seg));
+      }
       const err = h("div", { class: "err", id: "pop-law-err", hidden: true });
-      const input = h("input", { id: "pop-law", value: n.law[key] || "", spellcheck: false, autocomplete: "off", "aria-label": `${info.lawLabel} constitutive law`,
+      const input = h("input", { id: "pop-law", value: n.law[key] || "", spellcheck: false, autocomplete: "off", "aria-label": `${label} constitutive law`,
         onfocus: () => pushHistory(),
         oninput: (e) => { n.law[key] = e.target.value; changed({ soft: true }); updateLawPreview(); } });
-      const row = h("div", { class: "law-row", id: "pop-law-row" }, h("label", { for: "pop-law" }, info.lawLabel), input);
+      const row = h("div", { class: "law-row", id: "pop-law-row" }, h("label", { for: "pop-law" }, label), input);
       pop.append(h("div", { class: "field" }, h("span", null, "Constitutive law"), row, err));
       pop.append(h("div", { class: "preview-law", id: "pop-preview", "aria-live": "polite" }));
 
-      // Variables you can use, inserted at the cursor.
-      const vars = [];
-      if (n.kind === "C") vars.push("q_" + n.name);
-      if (n.kind === "I") vars.push("p_" + n.name);
-      if (BE.TWO_PORT[n.kind]) vars.push("e_" + n.name, "f_" + n.name, "e_" + n.name + "_2", "f_" + n.name + "_2");
-      else vars.push("e_" + n.name, "f_" + n.name);
-      vars.push("t");
+      // Variables you can use, inserted at the cursor. R, C and I laws name
+      // their own variables e, f, q, p; other elements use the bond names.
+      const own = BE.OWN_VARS[n.kind];
+      const vars = own ? own.map((v) => [v, OWN_TITLES[v]])
+        : (BE.TWO_PORT[n.kind] ? ["e_" + n.name, "f_" + n.name, "e_" + n.name + "_2", "f_" + n.name + "_2"] : ["e_" + n.name, "f_" + n.name]).map((v) => [v, v]);
+      vars.push(["t", "time"]);
       const chips = h("div", { class: "chips" });
-      vars.forEach((v) => chips.append(h("button", { type: "button", title: "Insert " + v, onclick: () => insertAtCursor(input, v) }, v)));
+      vars.forEach(([v, what]) => chips.append(h("button", { type: "button", title: "Insert " + what, onclick: () => insertAtCursor(input, v) }, v)));
       const tpl = h("select", { class: "btn small", "aria-label": "Insert a common law", onchange: (e) => {
-        if (!e.target.value) return;
+        const t = (TEMPLATES[n.kind] || [])[e.target.value];
+        if (!t) return;
         pushHistory();
-        n.law[key] = e.target.value.replaceAll("{n}", n.name);
-        input.value = n.law[key];
-        e.target.value = "";
-        changed({ soft: true }); updateLawPreview();
+        setLaw(n, t[2] || BE.LAW_KEY[n.kind], t[1].replaceAll("{n}", n.name));
+        changed(); buildPopover();
       } }, h("option", { value: "" }, "Common laws…"));
-      (TEMPLATES[n.kind] || []).forEach(([label, src]) => tpl.append(h("option", { value: src }, label)));
+      (TEMPLATES[n.kind] || []).forEach(([text], i) => tpl.append(h("option", { value: String(i) }, text)));
       pop.append(h("div", { class: "row", style: "justify-content: space-between; flex-wrap: wrap" }, chips, tpl));
 
       if (n.kind === "R") {
@@ -901,10 +991,15 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const nm = n.name;
     box.replaceChildren();
     const line = (...parts) => { const d = h("div"); parts.forEach((p) => d.append(typeof p === "string" ? up(p) : p)); box.append(d); };
+    const lhs = { e: v("e"), f: v("f", "in"), q: v("q", nm), p: v("p", nm) }[key];
     switch (n.kind) {
-      case "C": line(v("e"), " = ", v("q", nm), " ⁄ (", code, ")"); line("d", v("q", nm), "/d", v("t"), " = ", v("f", "in")); break;
-      case "I": line(v("f", "in"), " = ", v("p", nm), " ⁄ (", code, ")"); line("d", v("p", nm), "/d", v("t"), " = ", v("e")); break;
-      case "R": line(v("e"), " = (", code, ") · ", v("f", "in")); break;
+      case "C":
+        if (lhs) line(lhs, " = ", code); else line(v("e"), " = ", v("q", nm), " ⁄ (", code, ")");
+        line("d", v("q", nm), "/d", v("t"), " = ", v("f", "in")); break;
+      case "I":
+        if (lhs) line(lhs, " = ", code); else line(v("f", "in"), " = ", v("p", nm), " ⁄ (", code, ")");
+        line("d", v("p", nm), "/d", v("t"), " = ", v("e")); break;
+      case "R": if (lhs) line(lhs, " = ", code); else line(v("e"), " = (", code, ") · ", v("f", "in")); break;
       case "Se": line(v("e"), " = ", code); break;
       case "Sf": line(v("f", "out"), " = ", code); break;
       case "TF": line(v("e", "1"), " = ", v("n"), " ", v("e", "2"), ",   ", v("f", "2"), " = ", v("n"), " ", v("f", "1")); line(v("n"), " = ", code); break;
@@ -930,7 +1025,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       const b = inc[0], other = nodeById(b.from === n.id ? b.to : b.from);
       const setsFlow = caus.stroke[b.id] === n.id;
       box.append(h("span", null, `Sets ${setsFlow ? "flow" : "effort"} on its bond; ${other.name} sets ${setsFlow ? "effort" : "flow"}.` +
-        (n.kind === "R" ? ` Laws are written e = R·f either way; the solver inverts them as needed.` : "")));
+        (n.kind === "R" ? " The solver inverts the law when it has to; if it can't be inverted, fix the causality." : "")));
     } else if (BE.TWO_PORT[n.kind]) {
       const p = (k) => { const b = inc.find((x) => BE.portOf(x, n.id) === k); return b ? nodeById(b.from === n.id ? b.to : b.from).name : "unbonded"; };
       box.append(h("span", null, `Port 1 ↔ ${p(1)}, port 2 ↔ ${p(2)}.`));
@@ -997,6 +1092,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (ui.pop) { if (opts && opts.soft) { updatePopoverStatus(); positionPopover(); } else refreshPopover(); }
     clearTimeout(simTimer);
     simTimer = setTimeout(runSim, opts && opts.soft ? 220 : 60);
+    scheduleEq(opts && opts.soft ? 700 : 250);
     save();
     syncHistoryButtons();
   }
@@ -1330,6 +1426,134 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     } catch (_) { fallback(); }
   }
 
+  // ------------------------------------------------------------------ equations window
+  // SymPy solves the exported .bond text in a worker (equations.js); the window
+  // shows its LaTeX, one equation per state or as x' = A x + B u.
+  const EQ_KEY = STORE_KEY + "-eq";
+  const eq = { open: false, mode: "separate", pos: null, out: null, msg: "", fatal: false, busy: false, status: "", key: "", req: 0, timer: 0, solver: null };
+  try { const s = JSON.parse(localStorage.getItem(EQ_KEY)); if (s) Object.assign(eq, { open: !!s.open, mode: s.mode === "matrix" ? "matrix" : "separate", pos: s.pos || null }); } catch (_) {}
+  function saveEq() { try { localStorage.setItem(EQ_KEY, JSON.stringify({ open: eq.open, mode: eq.mode, pos: eq.pos })); } catch (_) {} }
+
+  function toggleEq(open) {
+    eq.open = open === undefined ? !eq.open : open;
+    $("#eqwin").hidden = !eq.open;
+    $("#btn-eq").setAttribute("aria-pressed", String(eq.open));
+    saveEq();
+    if (!eq.open) return;
+    placeEq();
+    window.BondEquations.loadKatex().then(renderEq, () => { eq.msg = "Couldn't load the math renderer (KaTeX). The equations window needs an internet connection the first time it opens."; eq.fatal = true; renderEq(); });
+    solveEq();
+  }
+  function scheduleEq(delay) {
+    if (!eq.open) return;
+    clearTimeout(eq.timer);
+    eq.timer = setTimeout(solveEq, delay);
+  }
+  // Why the graph can't be solved yet, or "".
+  function eqBlocker() {
+    if (!graph.bonds.length) return "Draw a bond graph to see its state equations.";
+    const v = BE.validate(graph);
+    if (v.errors.length) return "Fix the graph first: " + v.errors[0].msg + ".";
+    if (caus.conflicts.length) return `Resolve the causal conflict at ${caus.conflicts[0].msg} first.`;
+    return "";
+  }
+  function solveEq() {
+    const why = eqBlocker();
+    if (why) { eq.req++; eq.key = ""; eq.out = null; eq.msg = why; eq.fatal = false; eq.busy = false; renderEq(); return; }
+    // The solver uses the editor's causality, so the window always matches the strokes drawn.
+    const integral = {};
+    for (const n of graph.nodes) if (caus.storage[n.id]) integral[n.name] = caus.storage[n.id] === "integral";
+    const bond = BE.toBond(graph).split("\n").filter((l) => l && !l.startsWith("#")).join("\n"); // drop layout comments
+    const key = bond + JSON.stringify(integral);
+    if (key === eq.key && !eq.fatal) { renderEq(); return; } // only moved or restyled
+    const req = ++eq.req; // a reply to an older request is ignored
+    eq.key = key; eq.busy = true; eq.fatal = false;
+    if (!eq.solver) eq.solver = window.BondEquations.createSolver((text) => { eq.status = text; renderEqStatus(); });
+    eq.status = eq.status || "Solving…";
+    renderEq();
+    eq.solver.solve(bond, integral, (r) => {
+      if (req !== eq.req) return;
+      eq.busy = false; eq.status = "";
+      eq.out = r.result || null; eq.msg = r.error || ""; eq.fatal = !!r.fatal;
+      if (r.fatal) eq.key = ""; // retry on the next change
+      renderEq();
+    });
+  }
+  function renderEqStatus() {
+    const st = $("#eq-status");
+    if (!st) return;
+    let text = eq.busy ? eq.status || "Solving…" : "";
+    if (text.startsWith("Loading")) text += " This downloads about 11 MB the first time.";
+    st.hidden = !text;
+    st.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), text);
+  }
+  function renderEq() {
+    if (!eq.open) return;
+    renderEqStatus();
+    document.querySelectorAll("[data-eqmode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.eqmode === eq.mode)));
+    const body = $("#eq-body");
+    body.classList.toggle("stale", eq.busy && !!eq.out);
+    body.replaceChildren();
+    const note = (text, cls) => body.append(h("p", { class: "eq-note" + (cls ? " " + cls : "") }, text));
+    if (eq.msg && !eq.busy) {
+      note(eq.msg, eq.fatal ? "bad" : "");
+      if (eq.fatal) body.append(h("button", { class: "btn small", type: "button", onclick: () => { eq.key = ""; solveEq(); } }, "Try again"));
+      return;
+    }
+    const o = eq.out;
+    if (!o || !window.katex) return; // still loading; the status line says so
+    const math = (src) => { const d = h("div"); window.katex.render(src, d, { displayMode: true, throwOnError: false }); body.append(d); };
+    if (!o.states.length) note("No states: there's no C or I element in integral causality.");
+    else if (eq.mode === "matrix" && !o.solved) note("The matrix form needs every equation solved. Switch to Separate to see how far SymPy got.", "warn");
+    else if (eq.mode === "matrix") {
+      math(o.matrix);
+      if (!o.linear) note("These equations aren't linear in the states and inputs, so they're shown as one vector, ẋ = f(x, u).");
+    } else math(o.separate);
+    if (o.states.length && !o.solved) {
+      if (eq.mode === "separate") note("SymPy couldn't eliminate every algebraic variable, so some equations still contain bond variables (e, f).", "warn");
+      const details = h("details", null, h("summary", null, "Full equations (each equals zero)"));
+      body.append(details);
+      const d = h("div"); details.append(d);
+      window.katex.render("\\begin{aligned}" + o.full.map((s) => s.replace(/ = 0$/, " &= 0")).join(" \\\\ ") + "\\end{aligned}", d, { displayMode: true, throwOnError: false });
+    }
+    const dependent = graph.nodes.filter((n) => caus.storage[n.id] === "derivative").map((n) => n.name);
+    if (dependent.length) note(`${dependent.join(", ")} ${dependent.length > 1 ? "are" : "is"} in derivative causality, so ${dependent.length > 1 ? "they aren't states" : "it isn't a state"}.`);
+  }
+  function copyEq() {
+    const o = eq.out;
+    if (!o || !o.states.length) { toast("Nothing to copy yet."); return; }
+    const matrix = eq.mode === "matrix" && o.solved;
+    copyText(matrix ? o.matrix : o.separate, matrix ? "Copied the matrix form as LaTeX." : "Copied the equations as LaTeX.");
+  }
+  // Keep the window on screen, at its saved spot if it was dragged.
+  function placeEq() {
+    const w = $("#eqwin");
+    if (!eq.pos) return;
+    const x = Math.max(0, Math.min(window.innerWidth - 120, eq.pos.x)), y = Math.max(0, Math.min(window.innerHeight - 44, eq.pos.y));
+    Object.assign(w.style, { left: x + "px", top: y + "px", bottom: "auto" });
+  }
+  function wireEq() {
+    $("#btn-eq").addEventListener("click", () => toggleEq());
+    $("#eq-close").addEventListener("click", () => toggleEq(false));
+    $("#eq-copy").addEventListener("click", copyEq);
+    document.querySelectorAll("[data-eqmode]").forEach((b) => b.addEventListener("click", () => { eq.mode = b.dataset.eqmode; saveEq(); renderEq(); }));
+    const head = $("#eq-head");
+    let drag = null;
+    head.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button") || matchMedia("(max-width: 860px)").matches) return;
+      const r = $("#eqwin").getBoundingClientRect();
+      drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      head.setPointerCapture(e.pointerId);
+    });
+    head.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      eq.pos = { x: e.clientX - drag.dx, y: e.clientY - drag.dy };
+      placeEq();
+    });
+    head.addEventListener("pointerup", () => { if (drag) { drag = null; saveEq(); } });
+    window.addEventListener("resize", placeEq);
+  }
+
   // ------------------------------------------------------------------ modal & toast
   let toastTimer = 0;
   function toast(text) {
@@ -1593,6 +1817,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       renderTable();
     });
     $("#btn-csv").addEventListener("click", copyCSV);
+    wireEq();
 
     // Resizable split.
     const div = $("#divider");
@@ -1630,7 +1855,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       nextNode = 1; nextBond = 1; fixCounters();
     }
     syncHistoryButtons();
-    requestAnimationFrame(() => afterLoad(true));
+    requestAnimationFrame(() => { afterLoad(true); if (eq.open) toggleEq(true); });
   }
   init();
 })();

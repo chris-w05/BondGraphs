@@ -66,6 +66,61 @@ test("RC circuit matches q = RC(1 - exp(-t/RC)) and ignores arrow direction", ()
   }
 });
 
+test("R written as e = φ(f) or f = φ(e) matches the linear law whichever way the arrows point", () => {
+  const exact = 2 * 0.5 * 2 * (1 - Math.exp(-5 / 1));
+  for (const law of [{ e: "R*f" }, { f: "e/R" }]) {
+    for (const arrows of [["Is>n", "n>C1", "n>R1"], ["n>Is", "C1>n", "R1>n"]]) {
+      const g = G([["Is", "Sf", { value: "u(t)" }], ["n", "0"], ["C1", "C", { C: "C" }], ["R1", "R", law]], arrows);
+      const { r, val } = run(g, { tEnd: 5, steps: 2000, params: { R: "0.5", C: "2" }, inputs: { u: "2" } });
+      assert.deepEqual(r.model.params, ["C", "R"], "e and f are the resistor's own variables, not parameters");
+      near(val("q_C1"), exact, 2e-4, `q_C1 with ${JSON.stringify(law)} and arrows ${arrows}`);
+    }
+  }
+});
+
+test("C and I laws can be written as functions in either direction", () => {
+  for (const [k, m] of [[{ e: "q" }, { f: "p" }], [{ q: "e" }, { p: "f" }]]) {
+    const g = G([["F", "Se", { value: "0" }], ["v", "1"], ["m", "I", m], ["k", "C", k]], ["F>v", "v>m", "v>k"]);
+    const { c, at } = run(g, { tEnd: 10, steps: 4000, init: { q_k: "1" } });
+    assert.deepEqual(Object.values(c.storage), ["integral", "integral"]);
+    near(at("q_k", 10), Math.cos(10), 2e-3, `q_k(10) with C ${JSON.stringify(k)}, I ${JSON.stringify(m)}`);
+  }
+});
+
+test("nonlinear laws are inverted when the causality needs it", () => {
+  // Cubic spring e = q^3 behind a damper: settles where q^3 = F.
+  const spring = G([["F", "Se", { value: "8" }], ["v", "1"], ["k", "C", { e: "q**3" }], ["b", "R", { R: "1" }]], ["F>v", "v>k", "v>b"]);
+  near(run(spring, { tEnd: 20, steps: 2000 }).val("q_k"), 2, 1e-4, "cubic spring deflection");
+  // Saturating inductor p = tanh(f) in integral causality: the solver inverts it for f.
+  const coil = G([["V", "Se", { value: "1" }], ["a", "1"], ["L", "I", { p: "tanh(f)" }], ["R1", "R", { R: "1" }]], ["V>a", "a>L", "a>R1"]);
+  const { val } = run(coil, { tEnd: 20, steps: 2000 });
+  near(val("f_L"), 1, 1e-4, "steady current");
+  near(val("p_L"), Math.tanh(1), 1e-4, "flux linkage");
+  // Diode written f = φ(e) in flow causality, the way it's naturally given.
+  const diode = G([["V", "Se", { value: "sin(t)" }], ["l", "1"], ["D", "R", { f: "Piecewise((e/0.01,e>0),(e/100,True))" }], ["C1", "C", { C: "1" }]],
+    ["V>l", "l>D", "l>C1"]);
+  const d = run(diode, { tEnd: 6, steps: 1200 });
+  assert.ok(!d.r.partial, JSON.stringify(d.r.errors));
+  near(d.at("q_C1", Math.PI / 2), 1, 0.05, "capacitor charges to the peak through the diode");
+});
+
+test("function-form laws survive .bond export and import", () => {
+  const g = G([["Is", "Sf", { value: "1" }], ["n", "0"], ["C1", "C", { q: "C*e" }], ["R1", "R", { f: "e/R", causality: "flow" }],
+    ["m", "I", { p: "m*f" }], ["lonely", "R", { e: "b*f" }]], ["Is>n", "n>C1", "n>R1", "n>m"]);
+  const text = E.toBond(g);
+  assert.match(text, /^element C1 C q=C\*e$/m);
+  assert.match(text, /^element R1 R f=e\/R causality=flow$/m);
+  assert.match(text, /^#@node lonely R e=b\*f$/m);
+  const back = E.fromBond(text).graph.nodes;
+  const law = (nm) => back.find((n) => n.name === nm).law;
+  assert.deepEqual(law("C1"), { q: "C*e" });
+  assert.deepEqual(law("R1"), { f: "e/R", causality: "flow" });
+  assert.deepEqual(law("m"), { p: "m*f" });
+  assert.deepEqual(law("lonely"), { e: "b*f" });
+  assert.throws(() => E.fromBond("junction n 0: R1+\nelement R1 R R=1 f=e\n"), /two laws \(R= and f=\)/);
+  assert.throws(() => E.fromBond("junction n 0: C1+\nelement C1 C f=e\n"), /C takes C=, e=, q= not f=/);
+});
+
 test("DC motor (gyrator) reaches K v / (R b + K^2)", () => {
   const g = G([["V", "Se", { value: "1" }], ["arm", "1"], ["Ra", "R", { R: "1" }], ["La", "I", { I: "0.5" }],
     ["G", "GY", { n: "0.5" }], ["shaft", "1"], ["J", "I", { I: "0.1" }], ["b", "R", { R: "0.05" }]],
@@ -158,6 +213,12 @@ test(".bond export runs through the CLI format and imports back", () => {
   assert.equal(back.settings.params.R_a, "1");
   assert.equal(back.settings.inputs.v, "1");
   fs.writeFileSync(path.join(require("node:os").tmpdir(), "ui_export.bond"), text);
+});
+
+test("the equations window's copy of bondgraph.py is up to date", () => {
+  const embed = require("./embed-python.js");
+  assert.ok(fs.existsSync(embed.OUT) && fs.readFileSync(embed.OUT, "utf8") === embed.render(),
+    "ui/bondgraph-py.js is stale. Run: node ui/embed-python.js");
 });
 
 test("examples/dc_motor.bond imports and simulates", () => {

@@ -5,6 +5,8 @@
  *   - A bond's half-arrow is the reference direction of power. Element laws use
  *     the flow INTO the element, so flipping an arrow never changes the physics.
  *   - C: e = q/C, dq/dt = f_in      I: f_in = p/I, dp/dt = e      R: e = R*f_in
+ *     or a law as a function: C e=φ(q) | q=φ(e), I f=φ(p) | p=φ(f), R e=φ(f) | f=φ(e).
+ *     In an R, C or I law, e, f, q and p are the element's own effort, inflow and state.
  *   - Se: e = value                  Sf: flow delivered (out of the source) = value
  *   - TF: power in at port 1, out at port 2: e1 = n*e2, f2 = n*f1
  *   - GY: e1 = n*f2, e2 = n*f1
@@ -248,8 +250,20 @@
   const isElement = (kind) => !JUNCTION[kind];
   const maxBonds = (kind) => (JUNCTION[kind] ? Infinity : TWO_PORT[kind] ? 2 : 1);
 
-  // Law keys and defaults per element kind (same keys as the .bond format).
-  const LAW_KEY = { C: "C", I: "I", R: "R", Se: "value", Sf: "value", TF: "n", GY: "n" };
+  // Law keys per element kind (same keys as the .bond format). The first is the
+  // default: a coefficient (C, I, R, n) or a source value. The others give the
+  // law as a function, keyed by the variable it sets.
+  const LAW_FORMS = { C: ["C", "e", "q"], I: ["I", "f", "p"], R: ["R", "e", "f"], Se: ["value"], Sf: ["value"], TF: ["n"], GY: ["n"] };
+  const LAW_KEY = Object.fromEntries(Object.entries(LAW_FORMS).map(([k, forms]) => [k, forms[0]]));
+  // Names an R, C or I law uses for the element's own effort, inflow and state.
+  const OWN_VARS = { C: ["e", "f", "q"], I: ["e", "f", "p"], R: ["e", "f"] };
+
+  // Key of the law a node uses: the first form it has, else the default.
+  function lawKeyOf(node) {
+    const forms = LAW_FORMS[node.kind];
+    if (!forms) return undefined;
+    return forms.find((k) => node.law && node.law[k] !== undefined) || forms[0];
+  }
 
   function stateName(node) {
     return node.kind === "C" ? "q_" + node.name : node.kind === "I" ? "p_" + node.name : null;
@@ -490,13 +504,14 @@
     const lawAst = new Map(), errors = [];
     for (const n of nodes) {
       if (!LAW_KEY[n.kind]) continue;
-      const src = (n.law && n.law[LAW_KEY[n.kind]]) || "";
+      const src = (n.law && n.law[lawKeyOf(n)]) || "";
+      const own = OWN_VARS[n.kind] || [];
       try {
         const ast = parse(src);
         checkReserved(ast);
         lawAst.set(n.id, ast);
         const nm = names(ast);
-        nm.ids.forEach((id) => { if (id !== "t" && !sym.has(id)) paramNames.add(id); });
+        nm.ids.forEach((id) => { if (id !== "t" && !sym.has(id) && !own.includes(id)) paramNames.add(id); });
         nm.inputs.forEach((id) => inputNames.add(id));
       } catch (err) {
         errors.push({ node: n.id, msg: `${n.name}: ${err.message}` });
@@ -540,10 +555,20 @@
       } catch (err) { errors.push({ input: name, msg: `${name}(t): ${err.message}` }); }
     }
     const callInput = (name, argFn) => (c) => { const f = inputFns.get(name); return f ? f(c, argFn(c)) : NaN; };
+    // In an R, C or I law, e and f are the element's own effort and inflow (so
+    // the law doesn't depend on its bond's arrow) and q or p its own state.
+    function ownVars(n) {
+      if (!OWN_VARS[n.kind]) return null;
+      const b = incident(graph, n.id)[0], e = E(b), f = F(b), s = b.to === n.id ? 1 : -1;
+      const own = new Map([["e", (c) => c.v[e]], ["f", (c) => s * c.v[f]]]);
+      if (STORAGE[n.kind]) { const i = sym.get(stateName(n)); own.set(n.kind === "C" ? "q" : "p", (c) => c.v[i]); }
+      return own;
+    }
     const law = new Map();
     for (const [id, ast] of lawAst) {
-      try { law.set(id, compile(ast, resolve, callInput)); }
-      catch (err) { errors.push({ node: id, msg: `${graph.nodes.find((n) => n.id === id).name}: ${err.message}` }); }
+      const n = graph.nodes.find((x) => x.id === id), own = ownVars(n);
+      try { law.set(id, compile(ast, own ? (name) => own.get(name) || resolve(name) : resolve, callInput)); }
+      catch (err) { errors.push({ node: id, msg: `${n.name}: ${err.message}` }); }
     }
 
     // Residuals, each r(c) with c = { v, P, t }.
@@ -577,11 +602,21 @@
         }
         continue;
       }
-      const b = inc[0], e = E(b), f = F(b), s = into(b);
+      const b = inc[0], e = E(b), f = F(b), s = into(b), form = lawKeyOf(n);
       switch (n.kind) {
-        case "C": { const q = sym.get(stateName(n)); res.push((c) => c.v[e] - c.v[q] / L(c)); break; }
-        case "I": { const p = sym.get(stateName(n)); res.push((c) => s * c.v[f] - c.v[p] / L(c)); break; }
-        case "R": res.push((c) => c.v[e] - L(c) * s * c.v[f]); break;
+        case "C": {
+          const q = sym.get(stateName(n));
+          res.push(form === "e" ? (c) => c.v[e] - L(c) : form === "q" ? (c) => c.v[q] - L(c) : (c) => c.v[e] - c.v[q] / L(c));
+          break;
+        }
+        case "I": {
+          const p = sym.get(stateName(n));
+          res.push(form === "f" ? (c) => s * c.v[f] - L(c) : form === "p" ? (c) => c.v[p] - L(c) : (c) => s * c.v[f] - c.v[p] / L(c));
+          break;
+        }
+        case "R":
+          res.push(form === "e" ? (c) => c.v[e] - L(c) : form === "f" ? (c) => s * c.v[f] - L(c) : (c) => c.v[e] - L(c) * s * c.v[f]);
+          break;
         case "Se": res.push((c) => c.v[e] - L(c)); break;
         case "Sf": res.push((c) => -s * c.v[f] - L(c)); break;
       }
@@ -790,7 +825,7 @@
     lines.push("");
     for (const n of graph.nodes) {
       if (JUNCTION[n.kind] || !incident(graph, n.id).length) continue;
-      const key = LAW_KEY[n.kind];
+      const key = lawKeyOf(n);
       let line = `element ${n.name} ${n.kind} ${key}=${String((n.law && n.law[key]) || "").replace(/\s+/g, "")}`;
       if (n.kind === "R" && n.law && n.law.causality) line += ` causality=${n.law.causality}`;
       lines.push(line);
@@ -801,7 +836,7 @@
     lines.push("", "# --- editor data (comments; bondgraph.py ignores these) ---");
     for (const n of graph.nodes) {
       if (incident(graph, n.id).length) continue;
-      const key = LAW_KEY[n.kind];
+      const key = lawKeyOf(n);
       lines.push(`#@node ${n.name} ${n.kind}` + (key ? ` ${key}=${String((n.law && n.law[key]) || "").replace(/\s+/g, "")}` : ""));
     }
     for (const n of graph.nodes) lines.push(`#@pos ${n.name} ${Math.round(n.x)} ${Math.round(n.y)}`);
@@ -851,7 +886,15 @@
           if (eq < 0) throw new SyntaxError(`line ${i + 1}: expected key=value, got '${w}'`);
           law[w.slice(0, eq)] = w.slice(eq + 1);
         });
-        if (!law[LAW_KEY[kind]]) law[LAW_KEY[kind]] = (kind === "Se" || kind === "Sf" ? "u_" : kind === "TF" || kind === "GY" ? "n_" : kind + "_") + m[1];
+        const forms = LAW_FORMS[kind], allowed = kind === "R" ? forms.concat("causality") : forms;
+        const unknown = Object.keys(law).find((k) => !allowed.includes(k));
+        if (unknown) throw new SyntaxError(`line ${i + 1}: ${m[2]} takes ${allowed.map((k) => k + "=").join(", ")} not ${unknown}=`);
+        const given = forms.filter((k) => k in law);
+        if (given.length > 1) throw new SyntaxError(`line ${i + 1}: ${m[1]} has two laws (${given[0]}= and ${given[1]}=); give one`);
+        if (!given.some((k) => law[k])) {
+          given.forEach((k) => delete law[k]);
+          law[LAW_KEY[kind]] = (kind === "Se" || kind === "Sf" ? "u_" : kind === "TF" || kind === "GY" ? "n_" : kind + "_") + m[1];
+        }
         els.set(m[1], { id: nextId++, kind, name: m[1], x: 0, y: 0, law });
       } else if ((m = /^connect\s+(\w+)\s+(\w+)\s+(\w+)$/i.exec(line))) {
         connects.push([m[1], m[2], m[3], i + 1]);
@@ -959,7 +1002,7 @@
 
   const api = { parse, names, compile, evalConst, checkReserved, FUNCS, RESERVED, assignCausality, buildModel,
     simulate, validate, toBond, fromBond, autoLayout, bondAliases, portOf, stateName, incident, maxBonds,
-    STORAGE, TWO_PORT, JUNCTION, LAW_KEY, fmt };
+    lawKeyOf, STORAGE, TWO_PORT, JUNCTION, LAW_KEY, LAW_FORMS, OWN_VARS, fmt };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.BondEngine = api;
 })(typeof self !== "undefined" ? self : this);
