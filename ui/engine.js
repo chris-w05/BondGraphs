@@ -817,10 +817,11 @@
         lines.push(`# bond${b.id}: direct bond ${A.name} -> ${B.name}`);
       }
     }
+    const linked = new Set(connects.flatMap((c) => c.split(" ").slice(2)));
     for (const [name, toks] of members) {
       const n = graph.nodes.find((x) => x.name === name && JUNCTION[x.kind]);
       const kind = n ? n.kind : "1";
-      if (toks.length) lines.push(`junction ${name} ${kind}: ${toks.join(", ")}`);
+      if (toks.length || linked.has(name)) lines.push(`junction ${name} ${kind}: ${toks.join(", ")}`);
     }
     lines.push("");
     for (const n of graph.nodes) {

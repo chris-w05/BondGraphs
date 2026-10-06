@@ -121,6 +121,16 @@ test("function-form laws survive .bond export and import", () => {
   assert.throws(() => E.fromBond("junction n 0: C1+\nelement C1 C f=e\n"), /C takes C=, e=, q= not f=/);
 });
 
+test("a junction joined only to other junctions survives export", () => {
+  const g = G([["F", "Se", { value: "1" }], ["v", "1"], ["m", "I", { I: "1" }], ["J1", "1"], ["J2", "1"], ["I1", "I", { I: "1" }]],
+    ["F>v", "v>m", "v>J1", "J1>J2", "J2>I1"]);
+  const text = E.toBond(g);
+  assert.match(text, /^junction J1 1: *$/m);
+  const back = E.fromBond(text).graph;
+  assert.deepEqual(back.nodes.map((n) => n.name).sort(), ["F", "I1", "J1", "J2", "m", "v"]);
+  assert.equal(back.bonds.length, 5);
+});
+
 test("DC motor (gyrator) reaches K v / (R b + K^2)", () => {
   const g = G([["V", "Se", { value: "1" }], ["arm", "1"], ["Ra", "R", { R: "1" }], ["La", "I", { I: "0.5" }],
     ["G", "GY", { n: "0.5" }], ["shaft", "1"], ["J", "I", { I: "0.1" }], ["b", "R", { R: "0.05" }]],
