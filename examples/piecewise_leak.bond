@@ -1,0 +1,7 @@
+# Tank (C) filled by a flow source, drained through an outlet whose
+# resistance switches when the stored volume exceeds an overflow level.
+junction tank 0: Qin-, Tank+, Outlet+
+
+element Qin    Sf value=Q(t)
+element Tank   C  C=A/(rho*g)
+element Outlet R  R=Piecewise((R_low,q_Tank>V_max),(R_high,True))

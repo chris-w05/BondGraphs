@@ -1,0 +1,41 @@
+# Bond graph exported from the bond graph editor (ui/index.html).
+
+junction v 1: Input_signal-, I_Electrical+, R_Electrical+, GY1.1+
+junction J1 0: TF1.2-, R2+, R3+, C_fluid+
+junction J2 1: GY1.2-, R_damping+, C_bellows+, I_Magnet+, TF1.1+
+
+element Input_signal Se value=A*sin(w*t)
+element I_Electrical I I=m
+element R_Electrical R R=b
+element GY1 GY n=n_GY1
+element I_Magnet I I=m_I1
+element R_damping R R=R_R_damping
+element C_bellows C C=1/k_C1
+element TF1 TF n=n_TF1
+element R2 R R=R_R2 causality=flow
+element R3 R R=Piecewise((R_on,f_R3>0),(R_off,True)) causality=flow
+element C_fluid C C=C_C_fluid
+
+# --- editor data (comments; bondgraph.py ignores these) ---
+#@pos Input_signal 120 240
+#@pos v 300 240
+#@pos I_Electrical 300 100
+#@pos R_Electrical 300 380
+#@pos GY1 450 240
+#@pos I_Magnet 600 100
+#@pos R_damping 510 380
+#@pos C_bellows 690 380
+#@pos TF1 800 240
+#@pos J1 950 240
+#@pos J2 600 240
+#@pos R2 950 90
+#@pos R3 950 400
+#@pos C_fluid 1060 240
+#@param m=1
+#@param k=4
+#@param b=0.6
+#@param F0=1
+#@param A=120
+#@param w=60
+#@init p_I_Electrical=0
+#@sim tEnd=1 steps=1500

@@ -1,0 +1,1637 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bond Graph Workbench</title>
+<meta name="description" content="Draw bond graphs, see causality update live, and simulate the state response.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=STIX+Two+Text:ital@1&display=swap">
+<style>
+/* Layout: two-pane workbench. Graph-paper drawing surface on the left, response charts and model setup on the right. */
+:root {
+  --bg: #e9ece6;
+  --panel: #fafbf8;
+  --paper: #f6f7f3;
+  --grid: #e6e9e1;
+  --grid-major: #d9ddd2;
+  --ink: #1b1f22;
+  --ink-2: #4f575d;
+  --muted: #80888d;
+  --line: #d3d8cd;
+  --line-strong: #b5bcb0;
+  --accent: #2b59c3;
+  --accent-ink: #ffffff;
+  --accent-soft: #e2e9f8;
+  --good: #1b7a43;
+  --good-soft: #d8eedf;
+  --warn: #9c5a00;
+  --warn-soft: #f7e6c8;
+  --bad: #bf3a30;
+  --bad-soft: #f7dbd7;
+  --on-status: #ffffff;
+  --series: #2a78d6;
+  --chart-grid: #e5e8e0;
+  --chart-axis: #c3c8bc;
+  --shadow: 0 1px 2px rgba(24, 30, 24, .06), 0 10px 28px rgba(24, 30, 24, .12);
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-math: "STIX Two Text", "Cambria Math", "Times New Roman", serif;
+  --r: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1214; --panel: #171b1e; --paper: #13171a; --grid: #1c2226; --grid-major: #252d32;
+    --ink: #e6e9e4; --ink-2: #a9b1b5; --muted: #7b848a; --line: #2a3236; --line-strong: #3d474d;
+    --accent: #7ea2ff; --accent-ink: #0c1427; --accent-soft: #1d2944;
+    --good: #55c888; --good-soft: rgba(85, 200, 136, .16);
+    --warn: #e8a548; --warn-soft: rgba(232, 165, 72, .16);
+    --bad: #ff7b70; --bad-soft: rgba(255, 123, 112, .16);
+    --on-status: #0f1214; --series: #3987e5; --chart-grid: #232a2e; --chart-axis: #3a444a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1214; --panel: #171b1e; --paper: #13171a; --grid: #1c2226; --grid-major: #252d32;
+  --ink: #e6e9e4; --ink-2: #a9b1b5; --muted: #7b848a; --line: #2a3236; --line-strong: #3d474d;
+  --accent: #7ea2ff; --accent-ink: #0c1427; --accent-soft: #1d2944;
+  --good: #55c888; --good-soft: rgba(85, 200, 136, .16);
+  --warn: #e8a548; --warn-soft: rgba(232, 165, 72, .16);
+  --bad: #ff7b70; --bad-soft: rgba(255, 123, 112, .16);
+  --on-status: #0f1214; --series: #3987e5; --chart-grid: #232a2e; --chart-axis: #3a444a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
+
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+* { box-sizing: border-box; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--font-mono); }
+
+.app { height: 100%; display: flex; flex-direction: column; padding-inline: 16px; padding-block: 0 12px; gap: 10px; }
+
+/* ---- top bar */
+.topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-block: 10px 0; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.brand h1 { font: 600 19px/1.1 var(--font-display); letter-spacing: .01em; margin: 0; }
+.brand .sub { color: var(--muted); font-size: 12.5px; }
+.brand svg { flex: none; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding-inline: 12px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--panel); cursor: pointer; font-weight: 500; font-size: 13px; white-space: nowrap; }
+.btn:hover { border-color: var(--line-strong); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.danger { color: var(--bad); }
+.btn.danger:hover { border-color: var(--bad); }
+.btn.small { height: 26px; padding-inline: 9px; font-size: 12.5px; }
+.btn[disabled] { opacity: .45; cursor: default; }
+select.btn { padding-right: 8px; }
+
+/* ---- split */
+.split { flex: 1; min-height: 0; display: flex; gap: 0; }
+.editor { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.divider { flex: none; width: 12px; cursor: col-resize; position: relative; touch-action: none; }
+.divider::after { content: ""; position: absolute; inset: 40% 5px; border-radius: 2px; background: var(--line-strong); opacity: .7; }
+.divider:hover::after, .divider.drag::after { background: var(--accent); opacity: 1; }
+.sim { flex: none; width: var(--sim-w, 440px); min-width: 320px; max-width: 70%; display: flex; flex-direction: column; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--r); overflow: auto; }
+
+/* ---- toolbar */
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 10px; border-bottom: 1px solid var(--line); align-items: center; }
+.tool-group { display: flex; gap: 3px; align-items: center; }
+.tool-group + .tool-group { padding-left: 14px; border-left: 1px solid var(--line); }
+.tool { position: relative; height: 32px; min-width: 34px; padding-inline: 9px; border-radius: 6px; border: 1px solid transparent; background: transparent;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.tool:hover { background: var(--bg); color: var(--ink); }
+.tool[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.tool.sym { font: 600 14px var(--font-mono); color: var(--ink); }
+.tool[disabled] { opacity: .35; cursor: default; }
+.tool[disabled]:hover { background: transparent; }
+
+/* ---- canvas */
+.canvas-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--grid-major) 1px, transparent 1px), linear-gradient(90deg, var(--grid-major) 1px, transparent 1px),
+    linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); }
+#canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; user-select: none; -webkit-user-select: none; display: block; }
+.canvas-wrap.placing #canvas, .canvas-wrap.bonding #canvas { cursor: crosshair; }
+.canvas-wrap.panning #canvas { cursor: grabbing; }
+
+.node { cursor: pointer; }
+.node .box { fill: var(--paper); stroke: var(--line-strong); stroke-width: 1.2; }
+.node:hover .box { stroke: var(--ink-2); }
+.node .lbl { font: 600 14px var(--font-mono); fill: var(--ink); dominant-baseline: central; text-anchor: middle; }
+.node .lbl .nm { font-weight: 400; fill: var(--ink-2); }
+.node .law { font: 400 10.5px var(--font-mono); fill: var(--ink-2); text-anchor: middle; dominant-baseline: central; }
+.node.junction .box { stroke: transparent; }
+.node.junction:hover .box { stroke: var(--line-strong); }
+.node.junction .lbl { font-size: 19px; }
+.node.junction .jn { font: 400 10px var(--font-mono); fill: var(--muted); text-anchor: middle; paint-order: stroke; stroke: var(--paper); stroke-width: 3px; }
+.node.st-int .box { fill: var(--good-soft); stroke: var(--good); stroke-width: 1.6; }
+.node.st-der .box { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 1.6; }
+.node.st-bad .box { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.8; }
+.node .ring { fill: none; stroke: var(--accent); stroke-width: 2; }
+.node.linked .box { stroke: var(--series); stroke-width: 2.4; }
+.badge rect { stroke: none; }
+.badge text { font: 600 10px var(--font-math); font-style: italic; text-anchor: middle; dominant-baseline: central; fill: var(--on-status); }
+.badge.int rect { fill: var(--good); }
+.badge.der rect { fill: var(--warn); }
+
+.bond { cursor: pointer; }
+.bond .hit { stroke: transparent; stroke-width: 16; }
+.bond .stem, .bond .arrow { stroke: var(--ink-2); stroke-width: 1.7; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.bond .stroke { stroke: var(--ink); stroke-width: 2.6; stroke-linecap: round; }
+.bond:hover .stem, .bond:hover .arrow { stroke: var(--ink); }
+.bond.selected .stem, .bond.selected .arrow, .bond.selected .stroke { stroke: var(--accent); }
+.bond .port { font: 500 10px var(--font-mono); fill: var(--muted); text-anchor: middle; dominant-baseline: central; }
+#overlay { pointer-events: none; }
+.preview { stroke: var(--accent); stroke-width: 1.7; stroke-dasharray: 5 4; fill: none; }
+.preview.bad { stroke: var(--bad); }
+.ghost .box { fill: var(--panel); stroke: var(--accent); stroke-dasharray: 4 3; opacity: .9; }
+.ghost .lbl { fill: var(--accent); }
+
+.zoom { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 2px; box-shadow: var(--shadow); }
+.zoom button { width: 28px; height: 26px; border: 0; background: transparent; border-radius: 5px; cursor: pointer; color: var(--ink-2); font: 500 14px var(--font-mono); }
+.zoom button:hover { background: var(--bg); color: var(--ink); }
+.empty { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.empty div { text-align: center; color: var(--ink-2); max-width: 34ch; background: color-mix(in srgb, var(--paper) 85%, transparent); padding: 14px 18px; border-radius: 10px; }
+.empty b { color: var(--ink); display: block; font: 600 16px var(--font-display); margin-bottom: 4px; }
+
+/* ---- status bar */
+.statusbar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 7px 10px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 3px; border-radius: 999px; background: var(--bg); font-weight: 500; white-space: nowrap; }
+.chip .dot { min-width: 22px; height: 18px; padding-inline: 5px; border-radius: 999px; display: inline-grid; place-items: center; font: 600 10.5px var(--font-math); font-style: italic; color: var(--on-status); }
+.chip.int .dot { background: var(--good); }
+.chip.der .dot { background: var(--warn); }
+.chip.bad .dot { background: var(--bad); font-style: normal; font-family: var(--font-ui); }
+.statusbar .hint { margin-left: auto; color: var(--muted); }
+
+/* ---- popover */
+.popover { position: absolute; z-index: 5; width: 316px; max-width: calc(100% - 20px); background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: 10px; box-shadow: var(--shadow); padding: 12px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.pop-head { display: flex; align-items: center; gap: 8px; }
+.pop-head .kind { font: 600 13px var(--font-mono); background: var(--bg); border-radius: 5px; padding: 2px 7px; }
+.pop-head .title { font-weight: 600; }
+.pop-head .x { margin-left: auto; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; color: var(--muted); font-size: 17px; line-height: 1; }
+.pop-head .x:hover { background: var(--bg); color: var(--ink); }
+.pop-desc { color: var(--ink-2); margin-top: -6px; font-size: 12.5px; }
+.field { display: grid; gap: 4px; }
+.field > span { font-size: 11.5px; font-weight: 500; color: var(--ink-2); letter-spacing: .02em; }
+.row { display: flex; gap: 8px; align-items: center; }
+.law-row { display: flex; align-items: stretch; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--paper); overflow: hidden; }
+.law-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.law-row label { padding: 0 8px; display: flex; align-items: center; font: italic 15px var(--font-math); color: var(--ink-2); background: var(--bg); border-right: 1px solid var(--line); white-space: nowrap; }
+.law-row input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 7px 8px; font: 13px var(--font-mono); outline: none; }
+.text-in { height: 32px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--paper); padding-inline: 8px; font: 13px var(--font-mono); min-width: 0; width: 100%; }
+.text-in:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.text-in.invalid, .law-row.invalid { border-color: var(--bad); }
+.err { color: var(--bad); font-size: 12px; }
+.preview-law { font: italic 15.5px/1.6 var(--font-math); color: var(--ink); padding: 6px 9px; border-radius: 7px; background: var(--bg); overflow-x: auto; white-space: nowrap; }
+.preview-law code { font: normal 12.5px var(--font-mono); color: var(--ink-2); }
+.preview-law .up { font-style: normal; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips button { font: 12px var(--font-mono); border: 1px solid var(--line); background: var(--paper); border-radius: 5px; padding: 1px 6px; cursor: pointer; color: var(--ink-2); }
+.chips button:hover { border-color: var(--accent); color: var(--accent); }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: var(--paper); padding: 5px 10px; cursor: pointer; font-size: 12.5px; color: var(--ink-2); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.status-line { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--ink-2); padding-top: 8px; border-top: 1px solid var(--line); }
+.status-line .chip { padding: 0; background: none; }
+.pop-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pop-foot .note { color: var(--muted); font-size: 12px; }
+
+/* ---- sim pane */
+.sim-head { padding: 14px 16px 10px; display: grid; gap: 10px; border-bottom: 1px solid var(--line); }
+.sim-head h2, .sec h3 { margin: 0; font: 600 16px var(--font-display); letter-spacing: .01em; }
+.sim-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sim-title .meta { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.time-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.time-row label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+.time-row input { width: 84px; }
+.msgs { display: grid; gap: 6px; padding: 10px 16px 0; }
+.msg { border-radius: 7px; padding: 8px 10px; font-size: 12.5px; display: flex; gap: 8px; align-items: flex-start; }
+.msg.error { background: var(--bad-soft); color: var(--ink); }
+.msg.warn { background: var(--warn-soft); color: var(--ink); }
+.msg .ico { flex: none; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font: 700 11px var(--font-ui); color: var(--on-status); margin-top: 1px; }
+.msg.error .ico { background: var(--bad); }
+.msg.warn .ico { background: var(--warn); }
+
+.charts-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 16px 4px; }
+.charts-head .t-read { margin-right: auto; font: 500 12.5px var(--font-mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.charts { display: grid; gap: 4px; padding: 0 8px 8px; transition: opacity .2s; }
+.charts.stale { opacity: .42; }
+.chart { padding: 6px 8px 2px; border-radius: 7px; }
+.chart:hover, .chart.hot { background: var(--bg); }
+.chart-top { display: flex; align-items: baseline; gap: 8px; padding-inline: 4px; }
+.chart-top .nm { font: 500 13px var(--font-mono); }
+.chart-top .desc { color: var(--muted); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-top .val { margin-left: auto; font: 600 13px var(--font-mono); font-variant-numeric: tabular-nums; }
+.chart-top .rm { border: 0; background: transparent; color: var(--muted); cursor: pointer; width: 22px; height: 22px; border-radius: 5px; font-size: 15px; line-height: 1; }
+.chart-top .rm:hover { background: var(--panel); color: var(--ink); }
+.chart canvas { display: block; width: 100%; height: 118px; outline: none; }
+.chart canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.chart .tag { font-size: 11px; color: var(--warn); font-weight: 500; }
+.no-charts { padding: 18px 16px; color: var(--ink-2); }
+
+.table-wrap { overflow-x: auto; margin: 0 16px 12px; border: 1px solid var(--line); border-radius: 7px; max-height: 320px; }
+table.data { border-collapse: collapse; width: 100%; font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+table.data th, table.data td { padding: 4px 10px; text-align: right; white-space: nowrap; }
+table.data th { position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); font-weight: 500; color: var(--ink-2); }
+table.data tr:nth-child(even) td { background: var(--bg); }
+
+.sec { padding: 14px 16px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.sec .lead { color: var(--muted); font-size: 12.5px; margin-top: -4px; }
+.kv { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: 6px 10px; align-items: center; }
+.kv .k { font: 13px var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+.kv .k small { font-family: var(--font-ui); color: var(--muted); font-size: 11.5px; display: block; }
+.kv .dep { color: var(--muted); font-size: 12.5px; }
+.kv .err { grid-column: 1 / -1; margin-top: -4px; }
+
+/* ---- modal & toast */
+.modal { position: fixed; inset: 0; z-index: 20; background: rgba(10, 14, 12, .35); display: grid; place-items: center; padding: 16px; }
+.modal-card { width: min(640px, 100%); max-height: calc(100% - 32px); overflow: auto; background: var(--panel); border-radius: 12px; border: 1px solid var(--line); box-shadow: var(--shadow); padding: 18px; display: grid; gap: 12px; }
+.modal-card h2 { margin: 0; font: 600 18px var(--font-display); }
+.modal-card p { margin: 0; color: var(--ink-2); }
+.modal-card textarea { width: 100%; min-height: 300px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--paper); padding: 10px; font: 12.5px/1.5 var(--font-mono); }
+.modal-card .row { justify-content: flex-end; flex-wrap: wrap; }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--panel); padding: 8px 14px; border-radius: 8px; font-size: 13px; box-shadow: var(--shadow); max-width: calc(100% - 32px); }
+
+@media (max-width: 860px) {
+  html, body { height: auto; }
+  .app { height: auto; min-height: 100%; }
+  .split { flex-direction: column; gap: 12px; }
+  .editor { height: 68vh; min-height: 440px; flex: none; }
+  .divider { display: none; }
+  .sim { width: auto; max-width: none; min-width: 0; overflow: visible; }
+  .statusbar .hint { display: none; }
+  .tool-group + .tool-group { padding-left: 8px; }
+  .toolbar { gap: 6px 8px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg width="34" height="22" viewBox="0 0 34 22" aria-hidden="true">
+        <line x1="3" y1="15" x2="31" y2="15" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/>
+        <path d="M31 15 L22 7" stroke="var(--ink)" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <line x1="31" y1="8" x2="31" y2="21" stroke="var(--good)" stroke-width="2.6" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <h1>Bond Graph Workbench</h1>
+        <div class="sub">Draw the graph, read the causality, watch the states respond.</div>
+      </div>
+    </div>
+    <div class="actions">
+      <select class="btn" id="examples" aria-label="Load an example">
+        <option value="">Load an example…</option>
+      </select>
+      <button class="btn" id="btn-import" type="button">Import .bond</button>
+      <button class="btn" id="btn-export" type="button">Export .bond</button>
+      <button class="btn danger" id="btn-clear" type="button">Clear</button>
+    </div>
+  </header>
+
+  <main class="split" id="split">
+    <section class="editor" aria-label="Bond graph editor">
+      <div class="toolbar" role="toolbar" aria-label="Drawing tools">
+        <div class="tool-group" role="group" aria-label="Mode">
+          <button class="tool" type="button" data-tool="select" aria-pressed="true" title="Select, move and edit (V)">
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 1 L2 12 L5 9 L7.5 13 L9.2 12.2 L6.8 8.2 L11 8.2 Z" fill="currentColor"/></svg>Select
+          </button>
+          <button class="tool" type="button" data-tool="bond" aria-pressed="false" title="Draw bonds: drag from one node to another (B)">
+            <svg width="18" height="14" viewBox="0 0 18 14" aria-hidden="true"><line x1="1" y1="10" x2="16" y2="10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M16 10 L11 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Bond
+          </button>
+        </div>
+        <div class="tool-group" role="group" aria-label="Elements" id="palette-elements"></div>
+        <div class="tool-group" role="group" aria-label="Junctions" id="palette-junctions"></div>
+        <div class="tool-group" role="group" aria-label="History">
+          <button class="tool" type="button" id="btn-undo" title="Undo (Ctrl+Z)" aria-label="Undo">
+            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3 L1.5 6.5 L5 10 M2 6.5 H10 A4 4 0 0 1 10 14.5 H7" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="tool" type="button" id="btn-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
+            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M11 3 L14.5 6.5 L11 10 M14 6.5 H6 A4 4 0 0 0 6 14.5 H9" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="canvas-wrap" id="wrap">
+        <svg id="canvas" aria-label="Bond graph drawing">
+          <g id="viewport"><g id="bonds"></g><g id="nodes"></g><g id="overlay"></g></g>
+        </svg>
+        <div class="empty" id="empty" hidden><div><b>Start with a source</b>Pick an element above (or press its key) and click to place it. Then switch to Bond and drag between nodes.</div></div>
+        <div class="popover" id="popover" hidden role="dialog" aria-label="Element properties"></div>
+        <div class="zoom">
+          <button type="button" id="zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+          <button type="button" id="zoom-fit" title="Fit the graph to the view" aria-label="Fit to view">⤢</button>
+          <button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+        </div>
+      </div>
+      <footer class="statusbar" id="statusbar" aria-live="polite"></footer>
+    </section>
+
+    <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize panes" tabindex="0"></div>
+
+    <aside class="sim" aria-label="Simulation">
+      <div class="sim-head">
+        <div class="sim-title"><h2>State response</h2><span class="meta" id="sim-meta"></span></div>
+        <div class="time-row">
+          <label for="t-end">End time <input class="text-in" id="t-end" inputmode="decimal" value="10"> s</label>
+          <label for="t-steps">Steps <input class="text-in" id="t-steps" inputmode="numeric" value="1000"></label>
+        </div>
+      </div>
+      <div class="msgs" id="msgs"></div>
+      <div class="charts-head">
+        <span class="t-read" id="t-read"></span>
+        <select class="btn small" id="add-plot" aria-label="Add a plot"><option value="">Add a plot…</option></select>
+        <button class="btn small" type="button" id="btn-table" aria-pressed="false">Table</button>
+        <button class="btn small" type="button" id="btn-csv">Copy CSV</button>
+      </div>
+      <div class="charts" id="charts"></div>
+      <div id="table-host" hidden></div>
+      <section class="sec" id="sec-inputs" hidden>
+        <h3>Inputs</h3>
+        <p class="lead">Functions of time used in the laws, written like <code>Heaviside(t-1)</code> or <code>2*sin(3*t)</code>.</p>
+        <div class="kv" id="inputs"></div>
+      </section>
+      <section class="sec" id="sec-params" hidden>
+        <h3>Parameters</h3>
+        <p class="lead">Every name the laws use that isn't a state or bond variable. Numbers or arithmetic such as <code>1/3</code>.</p>
+        <div class="kv" id="params"></div>
+      </section>
+      <section class="sec" id="sec-init" hidden>
+        <h3>Initial conditions</h3>
+        <p class="lead">States start here at t = 0. Storage in derivative causality follows the other states.</p>
+        <div class="kv" id="inits"></div>
+      </section>
+    </aside>
+  </main>
+</div>
+
+<div class="modal" id="modal" hidden><div class="modal-card" role="dialog" aria-modal="true" id="modal-card"></div></div>
+<div class="toast" id="toast" hidden role="status"></div>
+
+<script src="engine.js"></script>
+<script>
+(() => {
+  "use strict";
+  const BE = window.BondEngine;
+  const $ = (s, r = document) => r.querySelector(s);
+  const SVG = "http://www.w3.org/2000/svg";
+  const STORE_KEY = "bond-graph-workbench-v1";
+
+  const KIND = {
+    Se: { title: "Effort source", desc: "Imposes an effort: force, voltage, pressure.", key: "E", lawLabel: "e(t) =" },
+    Sf: { title: "Flow source", desc: "Imposes a flow: velocity, current, volume flow.", key: "F", lawLabel: "f(t) =" },
+    C: { title: "Capacitance", desc: "Stores displacement q: spring, capacitor, tank.", key: "C", lawLabel: "C =" },
+    I: { title: "Inertance", desc: "Stores momentum p: mass, inductor, fluid inertia.", key: "I", lawLabel: "I =" },
+    R: { title: "Resistance", desc: "Dissipates power: damper, resistor, valve.", key: "R", lawLabel: "R =" },
+    TF: { title: "Transformer", desc: "Scales effort and flow: lever, gear pair, pulley.", key: "T", lawLabel: "n =" },
+    GY: { title: "Gyrator", desc: "Turns flow into effort: DC motor, gyroscope.", key: "G", lawLabel: "n =" },
+    "0": { title: "0-junction", desc: "Shared effort; flows sum to zero (parallel)." , key: "0" },
+    "1": { title: "1-junction", desc: "Shared flow; efforts sum to zero (series).", key: "1" },
+  };
+  const TEMPLATES = {
+    C: [["Linear spring, stiffness k", "1/k_{n}"], ["Capacitor", "C_{n}"], ["Hardening spring", "1/(k_{n}+k3_{n}*q_{n}**2)"], ["Tank, area A", "A_{n}/(rho*g)"]],
+    I: [["Mass", "m_{n}"], ["Inductor", "L_{n}"], ["Rotational inertia", "J_{n}"], ["Fluid inertance", "rho*l_{n}/A_{n}"]],
+    R: [["Linear", "R_{n}"], ["Diode (switches on the flow)", "Piecewise((R_on,f_{n}>0),(R_off,True))"], ["Quadratic (orifice)", "a_{n}*Abs(f_{n})"], ["Coulomb friction, smoothed", "F_c/Max(Abs(f_{n}),eps)"]],
+    Se: [["Constant", "1"], ["Step at t0", "A*Heaviside(t-t0)"], ["Sine", "A*sin(w*t)"], ["Pulse t1 to t2", "A*(Heaviside(t-t1)-Heaviside(t-t2))"], ["Input u(t)", "u(t)"]],
+    Sf: [["Constant", "1"], ["Step at t0", "A*Heaviside(t-t0)"], ["Sine", "A*sin(w*t)"], ["Pulse t1 to t2", "A*(Heaviside(t-t1)-Heaviside(t-t2))"], ["Input u(t)", "u(t)"]],
+    TF: [["Constant ratio", "n_{n}"], ["Modulated by time", "r(t)"]],
+    GY: [["Constant", "K_{n}"], ["Modulated by time", "r(t)"]],
+  };
+
+  // ------------------------------------------------------------------ state
+  let graph = { nodes: [], bonds: [] };
+  let settings = { tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} };
+  let plots = { hidden: [], extra: [] };
+  let nextNode = 1, nextBond = 1;
+  const view = { x: 0, y: 0, k: 1 };
+  const ui = { tool: "select", placing: null, sel: null, pop: null, mouse: null, drag: null, hoverIdx: null, linked: null, table: false };
+  let caus = { stroke: {}, storage: {}, conflicts: [], truncated: false };
+  let sim = null, setupModel = null, series = new Map();
+  const pm = () => (sim ? sim.model : null);
+  const undoStack = [], redoStack = [];
+
+  const nodeById = (id) => graph.nodes.find((n) => n.id === id);
+  const bondById = (id) => graph.bonds.find((b) => b.id === id);
+  const isJ = (n) => n.kind === "0" || n.kind === "1";
+  const lawKey = (n) => BE.LAW_KEY[n.kind];
+
+  // ------------------------------------------------------------------ persistence & history
+  const snapshot = () => JSON.stringify({ graph, settings, plots, nextNode, nextBond });
+  function restore(s) {
+    const o = JSON.parse(s);
+    graph = o.graph; settings = Object.assign({ tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} }, o.settings);
+    plots = o.plots || { hidden: [], extra: [] }; nextNode = o.nextNode || 1; nextBond = o.nextBond || 1;
+    fixCounters();
+  }
+  function fixCounters() {
+    nextNode = Math.max(nextNode, 1 + Math.max(0, ...graph.nodes.map((n) => n.id)));
+    nextBond = Math.max(nextBond, 1 + Math.max(0, ...graph.bonds.map((b) => b.id)));
+  }
+  function pushHistory() {
+    undoStack.push(snapshot());
+    if (undoStack.length > 120) undoStack.shift();
+    redoStack.length = 0;
+    syncHistoryButtons();
+  }
+  function undo() {
+    if (!undoStack.length) return;
+    redoStack.push(snapshot()); restore(undoStack.pop()); afterLoad(false);
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack.push(snapshot()); restore(redoStack.pop()); afterLoad(false);
+  }
+  function syncHistoryButtons() {
+    $("#btn-undo").disabled = !undoStack.length;
+    $("#btn-redo").disabled = !redoStack.length;
+  }
+  let saveTimer = 0;
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { try { localStorage.setItem(STORE_KEY, snapshot()); } catch (_) {} }, 250);
+  }
+
+  // ------------------------------------------------------------------ examples
+  function example(nodes, bonds, s, extra) {
+    const ns = nodes.map(([name, kind, x, y, law], i) => ({ id: i + 1, name, kind, x, y, law: law || {} }));
+    const id = (nm) => ns.find((n) => n.name === nm.split(".")[0]).id;
+    const port = (nm) => (nm.includes(".") ? Number(nm.split(".")[1]) : undefined);
+    const bs = bonds.map((str, i) => {
+      const [a, b] = str.split(">");
+      const o = { id: i + 1, from: id(a), to: id(b) };
+      if (port(a)) o.fromPort = port(a);
+      if (port(b)) o.toPort = port(b);
+      return o;
+    });
+    return { graph: { nodes: ns, bonds: bs }, settings: Object.assign({ params: {}, inputs: {}, init: {} }, s), plots: extra || { hidden: [], extra: [] } };
+  }
+  const EXAMPLES = {
+    msd: ["Mass–spring–damper", () => example([
+      ["F", "Se", 120, 240, { value: "F0*Heaviside(t-0.5)" }], ["v", "1", 300, 240], ["m", "I", 300, 100, { I: "m" }],
+      ["k", "C", 480, 240, { C: "1/k" }], ["b", "R", 300, 380, { R: "b" }],
+    ], ["F>v", "v>m", "v>k", "v>b"], { tEnd: 15, steps: 1500, params: { m: "1", k: "4", b: "0.6", F0: "1" } })],
+    rc: ["RC circuit, current pulse", () => example([
+      ["Is", "Sf", 120, 240, { value: "u(t)" }], ["n", "0", 300, 240], ["C1", "C", 300, 100, { C: "C" }], ["R1", "R", 480, 240, { R: "R" }],
+    ], ["Is>n", "n>C1", "n>R1"], { tEnd: 8, steps: 1600, params: { R: "1", C: "0.5" }, inputs: { u: "Heaviside(t-1)-Heaviside(t-4)" } })],
+    motor: ["DC motor (gyrator)", () => example([
+      ["V", "Se", 90, 240, { value: "v(t)" }], ["arm", "1", 240, 240], ["Ra", "R", 240, 380, { R: "R_a" }], ["La", "I", 240, 100, { I: "L_a" }],
+      ["G", "GY", 400, 240, { n: "K_t" }], ["shaft", "1", 560, 240], ["J", "I", 560, 100, { I: "J" }], ["b", "R", 560, 380, { R: "b" }],
+    ], ["V>arm", "arm>Ra", "arm>La", "arm>G.1", "G.2>shaft", "shaft>J", "shaft>b"],
+    { tEnd: 3, steps: 1500, params: { R_a: "1", L_a: "0.05", K_t: "0.5", J: "0.1", b: "0.05" }, inputs: { v: "12" } })],
+    tank: ["Tank with overflow (piecewise)", () => example([
+      ["Qin", "Sf", 120, 240, { value: "Q_in" }], ["tank", "0", 300, 240], ["Tank", "C", 300, 100, { C: "A/(rho*g)" }],
+      ["Outlet", "R", 480, 240, { R: "Piecewise((R_low,q_Tank>V_max),(R_high,True))" }],
+    ], ["Qin>tank", "tank>Tank", "tank>Outlet"],
+    { tEnd: 600, steps: 3000, params: { Q_in: "0.01", A: "1", rho: "1000", g: "9.81", R_high: "2e6", R_low: "6e5", V_max: "0.5" } })],
+    par: ["Parallel capacitors (derivative causality)", () => example([
+      ["Is", "Sf", 120, 240, { value: "1" }], ["n", "0", 300, 240], ["C1", "C", 230, 100, { C: "C_1" }],
+      ["C2", "C", 380, 100, { C: "C_2" }], ["R1", "R", 480, 240, { R: "R" }],
+    ], ["Is>n", "n>C1", "n>C2", "n>R1"], { tEnd: 10, steps: 1000, params: { C_1: "1", C_2: "2", R: "1" } })],
+  };
+
+  // ------------------------------------------------------------------ model edits
+  function uniqueName(prefix) {
+    let i = 1;
+    while (graph.nodes.some((n) => n.name === prefix + i)) i++;
+    return prefix + i;
+  }
+  function defaultLaw(kind, name) {
+    switch (kind) {
+      case "C": return { C: "C_" + name };
+      case "I": return { I: "I_" + name };
+      case "R": return { R: "R_" + name };
+      case "Se": case "Sf": return { value: "1" };
+      case "TF": case "GY": return { n: "n_" + name };
+      default: return {};
+    }
+  }
+  function addNode(kind, x, y) {
+    pushHistory();
+    const name = uniqueName(isJ({ kind }) ? "J" : kind);
+    const n = { id: nextNode++, kind, name, x: snap(x), y: snap(y), law: defaultLaw(kind, name) };
+    graph.nodes.push(n);
+    ui.sel = { type: "node", id: n.id };
+    changed();
+    return n;
+  }
+  function deleteNode(id) {
+    pushHistory();
+    graph.bonds = graph.bonds.filter((b) => b.from !== id && b.to !== id);
+    graph.nodes = graph.nodes.filter((n) => n.id !== id);
+    closePopover(); ui.sel = null; changed();
+  }
+  function deleteBond(id) {
+    pushHistory();
+    graph.bonds = graph.bonds.filter((b) => b.id !== id);
+    closePopover(); ui.sel = null; changed();
+  }
+  function reverseBond(id) {
+    pushHistory();
+    const b = bondById(id);
+    [b.from, b.to] = [b.to, b.from];
+    const fp = b.fromPort, tp = b.toPort;
+    delete b.fromPort; delete b.toPort;
+    if (tp) b.fromPort = tp;
+    if (fp) b.toPort = fp;
+    changed(); openPopover({ type: "bond", id });
+  }
+  function canBond(fromId, toId) {
+    if (fromId === toId) return "A bond needs two different nodes.";
+    const A = nodeById(fromId), B = nodeById(toId);
+    if (graph.bonds.some((b) => (b.from === fromId && b.to === toId) || (b.from === toId && b.to === fromId))) return `${A.name} and ${B.name} are already bonded.`;
+    for (const n of [A, B]) {
+      const deg = BE.incident(graph, n.id).length;
+      if (deg >= BE.maxBonds(n.kind)) return BE.TWO_PORT[n.kind] ? `${n.name} already has both ports bonded.` : `${n.name} already has its bond. One-port elements take a single bond.`;
+    }
+    return "";
+  }
+  function freePort(nodeId, prefer) {
+    const used = new Set(BE.incident(graph, nodeId).map((b) => BE.portOf(b, nodeId)));
+    return used.has(prefer) ? 3 - prefer : prefer;
+  }
+  function addBond(fromId, toId) {
+    const why = canBond(fromId, toId);
+    if (why) { toast(why); return; }
+    pushHistory();
+    const b = { id: nextBond++, from: fromId, to: toId };
+    if (BE.TWO_PORT[nodeById(fromId).kind]) b.fromPort = freePort(fromId, 2);
+    if (BE.TWO_PORT[nodeById(toId).kind]) b.toPort = freePort(toId, 1);
+    graph.bonds.push(b);
+    ui.sel = { type: "bond", id: b.id };
+    changed();
+  }
+  function swapPorts(id) {
+    pushHistory();
+    for (const b of BE.incident(graph, id)) {
+      if (b.from === id) b.fromPort = 3 - (b.fromPort || 1);
+      if (b.to === id) b.toPort = 3 - (b.toPort || 1);
+    }
+    changed();
+  }
+  function renameNode(n, newName) {
+    newName = newName.trim();
+    if (newName === n.name) return "";
+    if (!/^[A-Za-z_]\w*$/.test(newName)) return "Use letters, digits and _ only, starting with a letter.";
+    if (graph.nodes.some((m) => m !== n && m.name === newName)) return `${newName} is already taken.`;
+    if (BE.RESERVED[newName]) return `${newName} is reserved in SymPy; pick another name.`;
+    pushHistory();
+    const old = n.name;
+    const re = new RegExp(`\\b([qpef])_${old}(_2)?\\b`, "g");
+    const sub = (s) => String(s).replace(re, (_, v, two) => `${v}_${newName}${two || ""}`);
+    for (const m of graph.nodes) for (const k of Object.keys(m.law || {})) m.law[k] = sub(m.law[k]);
+    // Carry default parameter names (C_C1 -> C_k) and their values along.
+    const key = lawKey(n);
+    if (key && /^[A-Za-z]+$/.test(key)) {
+      const dflt = `${key === "value" ? "u" : key}_${old}`;
+      if (n.law[key] === dflt) {
+        const nd = `${key === "value" ? "u" : key}_${newName}`;
+        n.law[key] = nd;
+        if (dflt in settings.params) { settings.params[nd] = settings.params[dflt]; delete settings.params[dflt]; }
+      }
+    }
+    for (const k of Object.keys(settings.init)) {
+      const nk = sub(k); if (nk !== k) { settings.init[nk] = settings.init[k]; delete settings.init[k]; }
+    }
+    plots.hidden = plots.hidden.map(sub); plots.extra = plots.extra.map(sub);
+    n.name = newName;
+    changed();
+    return "";
+  }
+
+  // ------------------------------------------------------------------ geometry
+  const snap = (v) => Math.round(v / 10) * 10;
+  const toWorld = (cx, cy) => {
+    const r = $("#canvas").getBoundingClientRect();
+    return { x: (cx - r.left - view.x) / view.k, y: (cy - r.top - view.y) / view.k };
+  };
+  function box(n) {
+    if (isJ(n)) return { hw: 15, hh: 15, round: true };
+    const len = n.kind.length + 1 + n.name.length, law = lawText(n).length;
+    return { hw: (Math.max(len * 8.43, law * 6.33) + 20) / 2, hh: law ? 20 : 15 };
+  }
+  function clipPoint(n, ux, uy) {
+    const b = box(n);
+    if (b.round) return { x: n.x + ux * (b.hw + 3), y: n.y + uy * (b.hh + 3) };
+    const tx = Math.abs(ux) > 1e-9 ? (b.hw + 3) / Math.abs(ux) : Infinity;
+    const ty = Math.abs(uy) > 1e-9 ? (b.hh + 3) / Math.abs(uy) : Infinity;
+    const t = Math.min(tx, ty);
+    return { x: n.x + ux * t, y: n.y + uy * t };
+  }
+
+  // ------------------------------------------------------------------ rendering: canvas
+  const el = (tag, attrs, parent) => {
+    const e = document.createElementNS(SVG, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  function storageStatus(n) {
+    if (!BE.STORAGE[n.kind]) return null;
+    if (!BE.incident(graph, n.id).length) return null;
+    return caus.storage[n.id] || null;
+  }
+  const conflictNodes = () => new Set(caus.conflicts.map((c) => c.node));
+
+  function render() {
+    const bondsG = $("#bonds"), nodesG = $("#nodes");
+    bondsG.replaceChildren(); nodesG.replaceChildren();
+    const bad = conflictNodes();
+    for (const b of graph.bonds) drawBond(b, bondsG);
+    for (const n of graph.nodes) drawNode(n, nodesG, bad.has(n.id));
+    drawOverlay();
+    $("#viewport").setAttribute("transform", `translate(${view.x} ${view.y}) scale(${view.k})`);
+    const wrap = $("#wrap"), g = 20 * view.k, G = 100 * view.k;
+    wrap.style.backgroundSize = `${G}px ${G}px, ${G}px ${G}px, ${g}px ${g}px, ${g}px ${g}px`;
+    wrap.style.backgroundPosition = `${view.x}px ${view.y}px`;
+    $("#empty").hidden = graph.nodes.length > 0;
+    renderStatus();
+    if (ui.pop) positionPopover();
+  }
+
+  function drawBond(b, parent) {
+    const A = nodeById(b.from), B = nodeById(b.to);
+    if (!A || !B) return;
+    let dx = B.x - A.x, dy = B.y - A.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const ux = dx / d, uy = dy / d, nx = uy, ny = -ux;
+    const p1 = clipPoint(A, ux, uy), p2 = clipPoint(B, -ux, -uy);
+    const g = el("g", { class: "bond" + (ui.sel && ui.sel.type === "bond" && ui.sel.id === b.id ? " selected" : ""), "data-bond": b.id }, parent);
+    const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    if ((p2.x - p1.x) * ux + (p2.y - p1.y) * uy <= 4) return;
+    el("line", { class: "hit", x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y }, g);
+    el("line", { class: "stem", x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y }, g);
+    const ah = Math.min(12, len * 0.35);
+    el("path", { class: "arrow", d: `M${p2.x} ${p2.y} L${p2.x - ux * ah + nx * ah * 0.62} ${p2.y - uy * ah + ny * ah * 0.62}` }, g);
+    const at = caus.stroke[b.id];
+    if (at !== undefined) {
+      const s = at === b.to ? p2 : p1;
+      el("line", { class: "stroke", x1: s.x + nx * 8, y1: s.y + ny * 8, x2: s.x - nx * 8, y2: s.y - ny * 8 }, g);
+    }
+    for (const [n, p, sgn] of [[A, p1, 1], [B, p2, -1]]) {
+      if (!BE.TWO_PORT[n.kind]) continue;
+      const port = BE.portOf(b, n.id);
+      const t = el("text", { class: "port", x: p.x + ux * sgn * 9 - nx * 9, y: p.y + uy * sgn * 9 - ny * 9 }, g);
+      t.textContent = port;
+    }
+    const title = el("title", {}, g);
+    const al = BE.bondAliases(graph, b)[0];
+    title.textContent = `${A.name} → ${B.name}  (e_${al}, f_${al})`;
+  }
+
+  function lawText(n) {
+    const key = lawKey(n);
+    if (!key) return "";
+    const v = String((n.law && n.law[key]) || "");
+    if (!v) return "";
+    const lab = n.kind === "Se" ? "e=" : n.kind === "Sf" ? "f=" : key + "=";
+    const s = lab + v;
+    return s.length > 20 ? s.slice(0, 19) + "…" : s;
+  }
+
+  function drawNode(n, parent, conflicted) {
+    const st = storageStatus(n);
+    const cls = ["node", isJ(n) ? "junction" : "element"];
+    if (conflicted) cls.push("st-bad"); else if (st === "integral") cls.push("st-int"); else if (st === "derivative") cls.push("st-der");
+    if (ui.linked === n.id) cls.push("linked");
+    const g = el("g", { class: cls.join(" "), "data-node": n.id, transform: `translate(${n.x} ${n.y})` }, parent);
+    const b = box(n);
+    if (ui.sel && ui.sel.type === "node" && ui.sel.id === n.id) {
+      el("rect", { class: "ring", x: -b.hw - 4, y: -b.hh - 4, width: 2 * b.hw + 8, height: 2 * b.hh + 8, rx: b.round ? b.hw + 4 : 10 }, g);
+    }
+    el("rect", { class: "box", x: -b.hw, y: -b.hh, width: 2 * b.hw, height: 2 * b.hh, rx: b.round ? b.hw : 7 }, g);
+    const law = isJ(n) ? "" : lawText(n);
+    const t = el("text", { class: "lbl", x: 0, y: law ? -6.5 : 0.5 }, g);
+    if (isJ(n)) {
+      t.textContent = n.kind;
+      const jn = el("text", { class: "jn", x: 0, y: b.hh + 12 }, g);
+      jn.textContent = n.name;
+    } else {
+      const k = el("tspan", {}, t); k.textContent = n.kind;
+      const nm = el("tspan", { class: "nm" }, t); nm.textContent = ":" + n.name;
+      if (law) { const lt = el("text", { class: "law", x: 0, y: 9.5 }, g); lt.textContent = law; }
+    }
+    if (st && !conflicted) {
+      const bg = el("g", { class: "badge " + (st === "integral" ? "int" : "der"), transform: `translate(${b.hw - 2} ${-b.hh - 1})` }, g);
+      const w = st === "integral" ? 16 : 26;
+      el("rect", { x: -w / 2, y: -7, width: w, height: 14, rx: 7 }, bg);
+      const bt = el("text", { x: 0, y: 0.5 }, bg); bt.textContent = st === "integral" ? "∫" : "d/dt";
+    }
+    const title = el("title", {}, g);
+    title.textContent = `${KIND[n.kind].title} ${n.name}` + (st ? ` · ${st} causality` : "") + (conflicted ? " · causal conflict" : "");
+  }
+
+  function drawOverlay() {
+    const ov = $("#overlay");
+    ov.replaceChildren();
+    const d = ui.drag;
+    if (d && d.type === "bond" && d.cur) {
+      const A = nodeById(d.from);
+      let tx = d.cur.x, ty = d.cur.y;
+      const target = d.target && nodeById(d.target);
+      if (target) { tx = target.x; ty = target.y; }
+      const dx = tx - A.x, dy = ty - A.y, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+      const p1 = clipPoint(A, ux, uy);
+      const p2 = target ? clipPoint(target, -ux, -uy) : { x: tx, y: ty };
+      const bad = target ? !!canBond(d.from, d.target) : false;
+      el("path", { class: "preview" + (bad ? " bad" : ""), d: `M${p1.x} ${p1.y} L${p2.x} ${p2.y} M${p2.x} ${p2.y} L${p2.x - ux * 12 + uy * 7.4} ${p2.y - uy * 12 - ux * 7.4}` }, ov);
+    }
+    if (ui.placing && ui.mouse) {
+      const fake = { kind: ui.placing, name: isJ({ kind: ui.placing }) ? "" : "?", x: snap(ui.mouse.x), y: snap(ui.mouse.y) };
+      const b = box(fake);
+      const g = el("g", { class: "node ghost " + (isJ(fake) ? "junction" : ""), transform: `translate(${fake.x} ${fake.y})` }, ov);
+      el("rect", { class: "box", x: -b.hw, y: -b.hh, width: 2 * b.hw, height: 2 * b.hh, rx: b.round ? b.hw : 7 }, g);
+      const t = el("text", { class: "lbl", x: 0, y: 0.5 }, g); t.textContent = fake.kind;
+    }
+  }
+
+  function renderStatus() {
+    const bar = $("#statusbar");
+    bar.replaceChildren();
+    let nInt = 0, nDer = 0;
+    for (const n of graph.nodes) { const s = storageStatus(n); if (s === "integral") nInt++; if (s === "derivative") nDer++; }
+    const chip = (cls, dot, text, title) => {
+      const c = document.createElement("span"); c.className = "chip " + cls; c.title = title;
+      const d = document.createElement("span"); d.className = "dot"; d.textContent = dot;
+      c.append(d, document.createTextNode(text)); bar.appendChild(c);
+    };
+    chip("int", "∫", `${nInt} integral`, "Storage elements in integral causality: each one is a state");
+    chip("der", "d/dt", `${nDer} derivative`, "Storage elements in derivative causality: they follow the other states");
+    if (caus.conflicts.length) chip("bad", "!", `${caus.conflicts.length} conflict${caus.conflicts.length > 1 ? "s" : ""}`, caus.conflicts.map((c) => c.msg).join("\n"));
+    const hint = document.createElement("span"); hint.className = "hint";
+    hint.textContent = ui.placing ? `Click to place ${KIND[ui.placing].title.toLowerCase()} · Esc cancels`
+      : ui.tool === "bond" ? "Drag from one node to another; power flows the way you drag"
+      : "Click a node to edit its law · Shift-drag between nodes to bond · drag empty space to pan";
+    bar.appendChild(hint);
+  }
+
+  // ------------------------------------------------------------------ popover
+  function openPopover(p) { ui.pop = p; buildPopover(); }
+  function closePopover() { ui.pop = null; const pop = $("#popover"); pop.hidden = true; pop.replaceChildren(); }
+  const h = (tag, props, ...kids) => {
+    const e = document.createElement(tag);
+    if (props) for (const k in props) {
+      if (k === "class") e.className = props[k];
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), props[k]);
+      else if (k in e && typeof props[k] !== "string") e[k] = props[k];
+      else e.setAttribute(k, props[k]);
+    }
+    for (const kid of kids) if (kid != null && kid !== false) e.append(kid);
+    return e;
+  };
+
+  function buildPopover() {
+    const pop = $("#popover");
+    pop.replaceChildren();
+    if (!ui.pop) { pop.hidden = true; return; }
+    pop.hidden = false;
+    if (ui.pop.type === "bond") buildBondPopover(pop); else buildNodePopover(pop);
+    positionPopover();
+  }
+
+  function buildNodePopover(pop) {
+    const n = nodeById(ui.pop.id);
+    if (!n) { closePopover(); return; }
+    const info = KIND[n.kind];
+    pop.setAttribute("aria-label", `${info.title} ${n.name}`);
+    pop.append(h("div", { class: "pop-head" },
+      h("span", { class: "kind" }, n.kind), h("span", { class: "title" }, info.title),
+      h("button", { class: "x", type: "button", "aria-label": "Close", onclick: () => { closePopover(); } }, "×")));
+    pop.append(h("div", { class: "pop-desc" }, info.desc));
+
+    const nameErr = h("div", { class: "err", hidden: true });
+    const nameIn = h("input", { class: "text-in", id: "pop-name", value: n.name, spellcheck: false, autocomplete: "off",
+      onchange: (e) => {
+        const msg = renameNode(n, e.target.value);
+        nameErr.hidden = !msg; nameErr.textContent = msg;
+        e.target.classList.toggle("invalid", !!msg);
+        if (!msg) refreshPopover();
+      },
+      onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } });
+    pop.append(h("label", { class: "field", for: "pop-name" }, h("span", null, "Name"), nameIn), nameErr);
+
+    if (isJ(n)) {
+      const seg = h("div", { class: "seg", role: "group", "aria-label": "Junction type" });
+      for (const k of ["0", "1"]) seg.append(h("button", { type: "button", "aria-pressed": String(n.kind === k),
+        onclick: () => { if (n.kind !== k) { pushHistory(); n.kind = k; changed(); buildPopover(); } } }, k === "0" ? "0 · shared effort" : "1 · shared flow"));
+      pop.append(h("div", { class: "field" }, h("span", null, "Type"), seg));
+    } else {
+      const key = lawKey(n);
+      const err = h("div", { class: "err", id: "pop-law-err", hidden: true });
+      const input = h("input", { id: "pop-law", value: n.law[key] || "", spellcheck: false, autocomplete: "off", "aria-label": `${info.lawLabel} constitutive law`,
+        onfocus: () => pushHistory(),
+        oninput: (e) => { n.law[key] = e.target.value; changed({ soft: true }); updateLawPreview(); } });
+      const row = h("div", { class: "law-row", id: "pop-law-row" }, h("label", { for: "pop-law" }, info.lawLabel), input);
+      pop.append(h("div", { class: "field" }, h("span", null, "Constitutive law"), row, err));
+      pop.append(h("div", { class: "preview-law", id: "pop-preview", "aria-live": "polite" }));
+
+      // Variables you can use, inserted at the cursor.
+      const vars = [];
+      if (n.kind === "C") vars.push("q_" + n.name);
+      if (n.kind === "I") vars.push("p_" + n.name);
+      if (BE.TWO_PORT[n.kind]) vars.push("e_" + n.name, "f_" + n.name, "e_" + n.name + "_2", "f_" + n.name + "_2");
+      else vars.push("e_" + n.name, "f_" + n.name);
+      vars.push("t");
+      const chips = h("div", { class: "chips" });
+      vars.forEach((v) => chips.append(h("button", { type: "button", title: "Insert " + v, onclick: () => insertAtCursor(input, v) }, v)));
+      const tpl = h("select", { class: "btn small", "aria-label": "Insert a common law", onchange: (e) => {
+        if (!e.target.value) return;
+        pushHistory();
+        n.law[key] = e.target.value.replaceAll("{n}", n.name);
+        input.value = n.law[key];
+        e.target.value = "";
+        changed({ soft: true }); updateLawPreview();
+      } }, h("option", { value: "" }, "Common laws…"));
+      (TEMPLATES[n.kind] || []).forEach(([label, src]) => tpl.append(h("option", { value: src }, label)));
+      pop.append(h("div", { class: "row", style: "justify-content: space-between; flex-wrap: wrap" }, chips, tpl));
+
+      if (n.kind === "R") {
+        const seg = h("div", { class: "seg", role: "group", "aria-label": "Fixed causality" });
+        [["", "Either"], ["effort", "Sets effort"], ["flow", "Sets flow"]].forEach(([v, label]) => seg.append(h("button", {
+          type: "button", "aria-pressed": String((n.law.causality || "") === v),
+          title: v === "flow" ? "For laws that can't be solved for flow, like an ideal diode" : v === "effort" ? "For laws that can't be solved for effort" : "Let the graph decide",
+          onclick: () => { pushHistory(); if (v) n.law.causality = v; else delete n.law.causality; changed(); buildPopover(); } }, label)));
+        pop.append(h("div", { class: "field" }, h("span", null, "Causality"), seg));
+      }
+      if (BE.TWO_PORT[n.kind]) {
+        pop.append(h("div", { class: "row" }, h("button", { class: "btn small", type: "button", onclick: () => { swapPorts(n.id); buildPopover(); } }, "Swap ports 1 ↔ 2"),
+          h("span", { class: "pop-foot" }, h("span", { class: "note" }, "Power enters port 1 and leaves port 2."))));
+      }
+    }
+    pop.append(h("div", { class: "status-line", id: "pop-status" }));
+    pop.append(h("div", { class: "pop-foot" },
+      h("span", { class: "note" }, `${BE.incident(graph, n.id).length} bond${BE.incident(graph, n.id).length === 1 ? "" : "s"}`),
+      h("button", { class: "btn small danger", type: "button", onclick: () => deleteNode(n.id) }, "Delete")));
+    updateLawPreview();
+    updatePopoverStatus();
+  }
+
+  function insertAtCursor(input, text) {
+    pushHistory();
+    const s = input.selectionStart ?? input.value.length, e = input.selectionEnd ?? s;
+    input.value = input.value.slice(0, s) + text + input.value.slice(e);
+    input.focus();
+    input.setSelectionRange(s + text.length, s + text.length);
+    input.dispatchEvent(new Event("input"));
+  }
+
+  // Typeset the constitutive relation with the current expression.
+  function updateLawPreview() {
+    const box = $("#pop-preview");
+    if (!box || !ui.pop || ui.pop.type !== "node") return;
+    const n = nodeById(ui.pop.id); if (!n) return;
+    const key = lawKey(n), src = n.law[key] || "";
+    const err = $("#pop-law-err"), row = $("#pop-law-row");
+    let msg = "";
+    try { const ast = BE.parse(src); BE.checkReserved(ast); } catch (e) { msg = e.message; }
+    if (err) { err.hidden = !msg; err.textContent = msg ? "Can't read this law: " + msg : ""; }
+    if (row) row.classList.toggle("invalid", !!msg);
+    const v = (s, sub) => { const sp = h("span", null, s); if (sub) sp.append(h("sub", null, sub)); return sp; };
+    const code = h("code", null, src || "…");
+    const up = (s) => h("span", { class: "up" }, s);
+    const nm = n.name;
+    box.replaceChildren();
+    const line = (...parts) => { const d = h("div"); parts.forEach((p) => d.append(typeof p === "string" ? up(p) : p)); box.append(d); };
+    switch (n.kind) {
+      case "C": line(v("e"), " = ", v("q", nm), " ⁄ (", code, ")"); line("d", v("q", nm), "/d", v("t"), " = ", v("f", "in")); break;
+      case "I": line(v("f", "in"), " = ", v("p", nm), " ⁄ (", code, ")"); line("d", v("p", nm), "/d", v("t"), " = ", v("e")); break;
+      case "R": line(v("e"), " = (", code, ") · ", v("f", "in")); break;
+      case "Se": line(v("e"), " = ", code); break;
+      case "Sf": line(v("f", "out"), " = ", code); break;
+      case "TF": line(v("e", "1"), " = ", v("n"), " ", v("e", "2"), ",   ", v("f", "2"), " = ", v("n"), " ", v("f", "1")); line(v("n"), " = ", code); break;
+      case "GY": line(v("e", "1"), " = ", v("n"), " ", v("f", "2"), ",   ", v("e", "2"), " = ", v("n"), " ", v("f", "1")); line(v("n"), " = ", code); break;
+    }
+  }
+
+  function updatePopoverStatus() {
+    const box = $("#pop-status");
+    if (!box || !ui.pop || ui.pop.type !== "node") return;
+    const n = nodeById(ui.pop.id); if (!n) return;
+    box.replaceChildren();
+    const conflict = caus.conflicts.find((c) => c.node === n.id);
+    const chip = (cls, dot) => h("span", { class: "chip " + cls }, h("span", { class: "dot" }, dot));
+    const inc = BE.incident(graph, n.id);
+    if (!inc.length) { box.append(h("span", null, "Not bonded yet. Switch to Bond and drag from this node.")); return; }
+    if (conflict) { box.append(chip("bad", "!"), h("span", null, "Causal conflict: " + conflict.msg.split(": ").slice(1).join(": ") + ".")); return; }
+    const st = storageStatus(n);
+    const sname = BE.stateName(n);
+    if (st === "integral") box.append(chip("int", "∫"), h("span", null, h("b", null, "Integral causality. "), "State ", h("code", null, sname), n.kind === "C" ? " (displacement)." : " (momentum)."));
+    else if (st === "derivative") box.append(chip("der", "d/dt"), h("span", null, h("b", null, "Derivative causality. "), h("code", null, sname), " is fixed by the other states, so it isn't independent."));
+    else if (n.kind === "R" || n.kind === "Se" || n.kind === "Sf") {
+      const b = inc[0], other = nodeById(b.from === n.id ? b.to : b.from);
+      const setsFlow = caus.stroke[b.id] === n.id;
+      box.append(h("span", null, `Sets ${setsFlow ? "flow" : "effort"} on its bond; ${other.name} sets ${setsFlow ? "effort" : "flow"}.` +
+        (n.kind === "R" ? ` Laws are written e = R·f either way; the solver inverts them as needed.` : "")));
+    } else if (BE.TWO_PORT[n.kind]) {
+      const p = (k) => { const b = inc.find((x) => BE.portOf(x, n.id) === k); return b ? nodeById(b.from === n.id ? b.to : b.from).name : "unbonded"; };
+      box.append(h("span", null, `Port 1 ↔ ${p(1)}, port 2 ↔ ${p(2)}.`));
+    } else if (isJ(n)) {
+      box.append(h("span", null, n.kind === "0" ? "One bond sets the shared effort; the rest set flows." : "One bond sets the shared flow; the rest set efforts."));
+    }
+  }
+
+  function buildBondPopover(pop) {
+    const b = bondById(ui.pop.id);
+    if (!b) { closePopover(); return; }
+    const A = nodeById(b.from), B = nodeById(b.to);
+    const al = BE.bondAliases(graph, b);
+    pop.setAttribute("aria-label", `Bond ${A.name} to ${B.name}`);
+    pop.append(h("div", { class: "pop-head" }, h("span", { class: "kind" }, "⇀"), h("span", { class: "title" }, `Bond ${A.name} → ${B.name}`),
+      h("button", { class: "x", type: "button", "aria-label": "Close", onclick: closePopover }, "×")));
+    const at = caus.stroke[b.id];
+    const receiver = at === b.to ? B : A, setter = receiver === A ? B : A;
+    const lines = h("div", { class: "pop-desc" });
+    lines.append(h("div", null, "Power is positive from ", h("b", null, A.name), " to ", h("b", null, B.name), "."));
+    if (at !== undefined) lines.append(h("div", null, h("b", null, setter.name), " sets the effort, ", h("b", null, receiver.name), " sets the flow (causal stroke at ", receiver.name, ")."));
+    lines.append(h("div", null, "Variables: ", ...al.flatMap((a, i) => [i ? ", " : "", h("code", null, "e_" + a), " ", h("code", null, "f_" + a)])));
+    pop.append(lines);
+    pop.append(h("div", { class: "pop-foot" },
+      h("button", { class: "btn small", type: "button", onclick: () => reverseBond(b.id) }, "Reverse direction"),
+      h("button", { class: "btn small danger", type: "button", onclick: () => deleteBond(b.id) }, "Delete")));
+  }
+
+  function refreshPopover() {
+    if (!ui.pop) return;
+    const active = document.activeElement;
+    if (ui.pop.type === "node" && active && $("#popover").contains(active) && active.tagName === "INPUT") {
+      updateLawPreview(); updatePopoverStatus(); positionPopover();
+    } else buildPopover();
+  }
+
+  function positionPopover() {
+    const pop = $("#popover");
+    if (!ui.pop || pop.hidden) return;
+    const wrap = $("#wrap");
+    const W = wrap.clientWidth, H = wrap.clientHeight, pw = pop.offsetWidth, ph = pop.offsetHeight;
+    let ax, ay, aw;
+    if (ui.pop.type === "node") {
+      const n = nodeById(ui.pop.id); if (!n) return;
+      ax = n.x * view.k + view.x; ay = n.y * view.k + view.y; aw = box(n).hw * view.k;
+    } else {
+      const b = bondById(ui.pop.id); if (!b) return;
+      const A = nodeById(b.from), B = nodeById(b.to);
+      ax = ((A.x + B.x) / 2) * view.k + view.x; ay = ((A.y + B.y) / 2) * view.k + view.y; aw = 10;
+    }
+    let left = ax + aw + 16;
+    if (left + pw > W - 10) left = ax - aw - 16 - pw;
+    if (left < 10) left = Math.max(10, Math.min(W - pw - 10, ax - pw / 2));
+    let top = ay - 40;
+    top = Math.max(10, Math.min(H - ph - 10, top));
+    pop.style.left = left + "px"; pop.style.top = top + "px";
+  }
+
+  // ------------------------------------------------------------------ pipeline
+  let simTimer = 0;
+  function changed(opts) {
+    caus = BE.assignCausality(graph);
+    render();
+    if (ui.pop) { if (opts && opts.soft) { updatePopoverStatus(); positionPopover(); } else refreshPopover(); }
+    clearTimeout(simTimer);
+    simTimer = setTimeout(runSim, opts && opts.soft ? 220 : 60);
+    save();
+    syncHistoryButtons();
+  }
+
+  function runSim() {
+    const msgs = [];
+    const v = BE.validate(graph);
+    v.errors.forEach((e) => msgs.push(["error", e.msg]));
+    caus.conflicts.forEach((c) => msgs.push(["error", `Causal conflict at ${c.msg}. The graph can't be simulated until it's resolved.`]));
+    if (caus.truncated) msgs.push(["warn", "The causality search stopped early on this large graph, so the strokes shown may not be the best assignment."]);
+    v.warnings.forEach((w) => msgs.push(["warn", w.msg]));
+    setupModel = BE.buildModel(graph, settings);
+    setupModel.errors.forEach((e) => msgs.push(["error", e.msg]));
+    settings.tEnd = $("#t-end").value; settings.steps = $("#t-steps").value;
+    let result = null;
+    const blocking = v.errors.length || caus.conflicts.length || setupModel.errors.length;
+    if (!blocking && graph.bonds.length) {
+      result = BE.simulate(graph, settings, caus);
+      result.errors.forEach((e) => msgs.push([result.ok ? "warn" : "error", e.msg]));
+    }
+    if (result && result.ok) {
+      sim = result;
+      series = new Map();
+      $("#sim-meta").textContent = `0–${BE.fmt(sim.T[sim.T.length - 1])} s · ${sim.T.length - 1} steps · ${sim.ms} ms`;
+      $("#charts").classList.remove("stale");
+    } else {
+      if (!graph.bonds.length) { sim = null; series = new Map(); }
+      $("#sim-meta").textContent = graph.bonds.length ? "Not simulated" : "";
+      $("#charts").classList.toggle("stale", !!sim);
+    }
+    renderMsgs(msgs);
+    renderSetup();
+    renderCharts();
+  }
+
+  function renderMsgs(msgs) {
+    const host = $("#msgs");
+    host.replaceChildren();
+    const seen = new Set();
+    for (const [kind, text] of msgs) {
+      if (seen.has(text)) continue; seen.add(text);
+      host.append(h("div", { class: "msg " + kind }, h("span", { class: "ico", "aria-hidden": "true" }, kind === "error" ? "!" : "i"), h("span", null, text)));
+    }
+    host.hidden = !host.children.length;
+  }
+
+  // ------------------------------------------------------------------ setup lists
+  const listKeys = {};
+  function renderKV(hostId, secId, items, getVal, setVal, opts) {
+    const host = $("#" + hostId);
+    $("#" + secId).hidden = !items.length;
+    const sig = items.map((i) => i.name + (i.disabled ? "!" : "")).join("|");
+    if (listKeys[hostId] === sig) {
+      // Update values that changed elsewhere (undo), without disturbing focus.
+      items.forEach((it) => {
+        const inp = host.querySelector(`[data-k="${CSS.escape(it.name)}"]`);
+        if (inp && document.activeElement !== inp && !it.disabled) inp.value = getVal(it.name);
+      });
+      return;
+    }
+    listKeys[hostId] = sig;
+    host.replaceChildren();
+    for (const it of items) {
+      const id = `${hostId}-${it.name}`;
+      host.append(h("label", { class: "k", for: id }, it.label || it.name, it.note ? h("small", null, it.note) : null));
+      if (it.disabled) { host.append(h("span", { class: "dep" }, it.disabled)); continue; }
+      const inp = h("input", { class: "text-in", id, value: getVal(it.name), placeholder: opts.placeholder, spellcheck: false, autocomplete: "off",
+        "data-k": it.name,
+        onfocus: () => pushHistory(),
+        oninput: (e) => { setVal(it.name, e.target.value); clearTimeout(simTimer); simTimer = setTimeout(runSim, 200); save(); } });
+      host.append(inp);
+    }
+  }
+  function renderSetup() {
+    const m = setupModel;
+    if (!m) return;
+    renderKV("inputs", "sec-inputs", m.inputs.map((n) => ({ name: n, label: n + "(t) =" })),
+      (n) => settings.inputs[n] ?? "", (n, v) => { settings.inputs[n] = v; }, { placeholder: "1" });
+    renderKV("params", "sec-params", m.params.map((n) => ({ name: n, label: n + " =" })),
+      (n) => settings.params[n] ?? "", (n, v) => { settings.params[n] = v; }, { placeholder: "1" });
+    renderKV("inits", "sec-init", m.states.map((s) => {
+      const node = nodeById(s.node);
+      const dep = caus.storage[s.node] === "derivative";
+      return { name: s.name, label: s.name + "(0) =", note: `${node.kind === "C" ? "displacement" : "momentum"} of ${node.name}`, disabled: dep ? "set by the other states" : "" };
+    }), (n) => settings.init[n] ?? "", (n, v) => { settings.init[n] = v; }, { placeholder: "0" });
+    // Mark invalid parameter entries inline.
+    for (const e of m.errors) {
+      const k = e.param || e.input;
+      const inp = k && document.querySelector(`[data-k="${CSS.escape(k)}"]`);
+      if (inp) inp.classList.add("invalid");
+    }
+    document.querySelectorAll("#params .text-in, #inputs .text-in").forEach((inp) => {
+      if (!m.errors.some((e) => (e.param || e.input) === inp.dataset.k)) inp.classList.remove("invalid");
+    });
+  }
+
+  // ------------------------------------------------------------------ charts
+  function varInfo(name) {
+    const m = pm();
+    if (!m || !m.sym.has(name)) return null;
+    const i = m.sym.get(name), info = m.symInfo[i];
+    if (info.kind === "state") {
+      const n = nodeById(info.node);
+      if (!n) return { name, index: i, desc: "removed from the graph", node: null };
+      const dep = caus.storage[info.node] === "derivative";
+      return { name, index: i, desc: `${n.kind === "C" ? "displacement" : "momentum"} of ${n.name}`, dep, node: n.id };
+    }
+    const b = bondById(info.bond);
+    const A = b && nodeById(b.from), B = b && nodeById(b.to);
+    const end = A && B ? (BE.JUNCTION[A.kind] ? B : A) : null;
+    return { name, index: i, desc: `${info.kind} on bond ${A ? A.name : "?"} → ${B ? B.name : "?"}`, node: end && !BE.JUNCTION[end.kind] ? end.id : null };
+  }
+  function plotList() {
+    const m = pm(); if (!m) return [];
+    const out = m.states.map((s) => s.name).filter((nm) => !plots.hidden.includes(nm));
+    for (const x of plots.extra) if (m.sym.has(x) && !out.includes(x)) out.push(x);
+    return out.map(varInfo).filter(Boolean);
+  }
+  function seriesOf(index) {
+    if (!sim) return null;
+    if (series.has(index)) return series.get(index);
+    const ys = new Float64Array(sim.X.length);
+    for (let i = 0; i < sim.X.length; i++) ys[i] = sim.X[i][index];
+    series.set(index, ys);
+    return ys;
+  }
+
+  let chartSig = "";
+  function renderCharts() {
+    const host = $("#charts");
+    const list = plotList();
+    fillAddPlot(list);
+    const sig = list.map((v) => v.name + (v.dep ? "!" : "")).join("|");
+    if (sig !== chartSig) {
+      chartSig = sig;
+      host.replaceChildren();
+      if (!list.length) host.append(h("div", { class: "no-charts" }, graph.nodes.length
+        ? "No states yet. Bond a C or I element into the graph and its state will plot here."
+        : "Draw a graph on the left. Each storage element in it becomes a state plotted here."));
+      for (const v of list) {
+        const cv = h("canvas", { tabindex: "0", "aria-label": `${v.name}, ${v.desc}, over time. Use the arrow keys to read values.`, "data-name": v.name });
+        const card = h("div", { class: "chart", "data-name": v.name },
+          h("div", { class: "chart-top" }, h("span", { class: "nm" }, v.name), h("span", { class: "desc" }, v.desc), v.dep ? h("span", { class: "tag" }, "dependent") : null,
+            h("span", { class: "val", "data-val": v.name }), h("button", { class: "rm", type: "button", title: "Remove this plot", "aria-label": `Remove plot of ${v.name}`, onclick: () => removePlot(v.name) }, "×")),
+          cv);
+        card.addEventListener("pointerenter", () => { ui.linked = v.node; render(); });
+        card.addEventListener("pointerleave", () => { ui.linked = null; render(); });
+        cv.addEventListener("pointermove", (e) => hoverAt(cv, e.clientX));
+        cv.addEventListener("pointerleave", () => { ui.hoverIdx = null; drawAllCharts(); });
+        cv.addEventListener("keydown", (e) => {
+          if (!sim) return;
+          const step = Math.max(1, Math.round(sim.T.length / 100)) * (e.shiftKey ? 10 : 1);
+          if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+            e.preventDefault();
+            const cur = ui.hoverIdx ?? (e.key === "ArrowRight" ? -step : sim.T.length - 1 + step);
+            ui.hoverIdx = Math.max(0, Math.min(sim.T.length - 1, cur + (e.key === "ArrowRight" ? step : -step)));
+            drawAllCharts();
+          }
+        });
+        cv.addEventListener("blur", () => { ui.hoverIdx = null; drawAllCharts(); });
+        host.append(card);
+      }
+    }
+    drawAllCharts();
+    if (ui.table) renderTable();
+  }
+  function hoverAt(cv, clientX) {
+    if (!sim) return;
+    const r = cv.getBoundingClientRect();
+    const L = 52, R = 14;
+    const tEnd = sim.T[sim.T.length - 1] || 1;
+    const t = ((clientX - r.left - L) / (r.width - L - R)) * tEnd;
+    const i = Math.round((t / tEnd) * (sim.T.length - 1));
+    ui.hoverIdx = Math.max(0, Math.min(sim.T.length - 1, i));
+    drawAllCharts();
+  }
+  function removePlot(name) {
+    if (pm() && pm().states.some((s) => s.name === name)) plots.hidden.push(name);
+    plots.extra = plots.extra.filter((x) => x !== name);
+    save(); renderCharts();
+  }
+  function fillAddPlot(list) {
+    const sel = $("#add-plot");
+    const m = pm();
+    sel.replaceChildren(h("option", { value: "" }, "Add a plot…"));
+    if (!m) return;
+    const shown = new Set(list.map((v) => v.name));
+    const groups = [["States", m.states.map((s) => s.name)], ["Efforts", []], ["Flows", []]];
+    m.symInfo.forEach((info) => {
+      if (!info) return;
+      if (info.kind === "effort") groups[1][1].push(info.name);
+      if (info.kind === "flow") groups[2][1].push(info.name);
+    });
+    for (const [label, names] of groups) {
+      const free = names.filter((nm) => !shown.has(nm));
+      if (!free.length) continue;
+      const og = h("optgroup", { label });
+      free.forEach((nm) => og.append(h("option", { value: nm }, nm)));
+      sel.append(og);
+    }
+  }
+
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  function niceTicks(lo, hi, count) {
+    if (!(hi > lo)) { const d = Math.abs(lo) * 0.1 || 1; lo -= d; hi += d; }
+    const raw = (hi - lo) / count, mag = Math.pow(10, Math.floor(Math.log10(raw))), r = raw / mag;
+    const step = (r >= 7 ? 10 : r >= 3 ? 5 : r >= 1.5 ? 2 : 1) * mag;
+    const a = Math.floor(lo / step + 1e-9) * step, b = Math.ceil(hi / step - 1e-9) * step;
+    const ticks = [];
+    for (let v = a; v <= b + step * 1e-6; v += step) ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+    return { lo: a, hi: b, ticks, step };
+  }
+  function tickLabel(v, step) {
+    const a = Math.abs(v);
+    if (a !== 0 && (a >= 1e5 || a < 1e-3)) return v.toExponential(Math.max(0, Math.min(3, Math.round(-Math.log10(step / a)))));
+    const dec = Math.max(0, Math.min(6, -Math.floor(Math.log10(step) + 1e-9)));
+    return v.toFixed(dec);
+  }
+
+  function drawAllCharts() {
+    const tRead = $("#t-read");
+    if (!sim) { tRead.textContent = ""; }
+    else if (ui.hoverIdx != null) tRead.textContent = `t = ${BE.fmt(sim.T[ui.hoverIdx])} s`;
+    else tRead.textContent = `End, t = ${BE.fmt(sim.T[sim.T.length - 1])} s`;
+    document.querySelectorAll("#charts canvas").forEach(drawChart);
+  }
+
+  function drawChart(cv) {
+    const name = cv.dataset.name;
+    const v = varInfo(name);
+    const valEl = document.querySelector(`[data-val="${CSS.escape(name)}"]`);
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth, H = cv.clientHeight;
+    if (!W || !H) return;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    const g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    const ys = sim && v ? seriesOf(v.index) : null;
+    if (!ys) { if (valEl) valEl.textContent = ""; return; }
+    const T = sim.T, n = Math.min(ys.length, T.length);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < n; i++) { const y = ys[i]; if (Number.isFinite(y)) { if (y < lo) lo = y; if (y > hi) hi = y; } }
+    if (lo === Infinity) { lo = 0; hi = 1; }
+    const yt = niceTicks(lo, hi, 3);
+    const tEnd = T[n - 1] || 1, xt = niceTicks(0, tEnd, Math.max(3, Math.min(6, Math.floor(W / 80))));
+    const L = 52, R = 14, Tp = 8, B = 20;
+    const X = (t) => L + (t / tEnd) * (W - L - R);
+    const Y = (y) => Tp + (1 - (y - yt.lo) / (yt.hi - yt.lo)) * (H - Tp - B);
+    const ink2 = css("--ink-2"), muted = css("--muted"), grid = css("--chart-grid"), axis = css("--chart-axis"), col = css("--series"), surf = css("--panel");
+    g.font = `11px ${css("--font-mono")}`;
+    g.textBaseline = "middle";
+    // grid + y labels
+    g.lineWidth = 1;
+    for (const tv of yt.ticks) {
+      const y = Math.round(Y(tv)) + 0.5;
+      g.strokeStyle = tv === 0 ? axis : grid;
+      g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke();
+      g.fillStyle = muted; g.textAlign = "right";
+      g.fillText(tickLabel(tv, yt.step), L - 8, y);
+    }
+    // x labels
+    g.textAlign = "center"; g.textBaseline = "alphabetic"; g.fillStyle = muted;
+    xt.ticks.forEach((tv, i) => {
+      if (tv > tEnd + 1e-9) return;
+      const x = X(tv);
+      g.strokeStyle = axis; g.beginPath(); g.moveTo(Math.round(x) + 0.5, H - B); g.lineTo(Math.round(x) + 0.5, H - B + 4); g.stroke();
+      const last = i === xt.ticks.length - 1 || xt.ticks[i + 1] > tEnd + 1e-9;
+      g.fillText(tickLabel(tv, xt.step) + (last ? " s" : ""), Math.min(x, W - R - 8), H - 4);
+    });
+    // line
+    g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = "round"; g.lineCap = "round";
+    g.beginPath();
+    let pen = false;
+    for (let i = 0; i < n; i++) {
+      const y = ys[i];
+      if (!Number.isFinite(y)) { pen = false; continue; }
+      const px = X(T[i]), py = Y(y);
+      if (pen) g.lineTo(px, py); else { g.moveTo(px, py); pen = true; }
+    }
+    g.stroke();
+    const dot = (i) => {
+      const px = X(T[i]), py = Y(ys[i]);
+      g.beginPath(); g.arc(px, py, 6, 0, Math.PI * 2); g.fillStyle = surf; g.fill();
+      g.beginPath(); g.arc(px, py, 4, 0, Math.PI * 2); g.fillStyle = col; g.fill();
+    };
+    const hi_ = ui.hoverIdx != null && ui.hoverIdx < n ? ui.hoverIdx : null;
+    if (hi_ != null) {
+      const x = Math.round(X(T[hi_])) + 0.5;
+      g.strokeStyle = ink2; g.globalAlpha = 0.55; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x, Tp); g.lineTo(x, H - B); g.stroke(); g.globalAlpha = 1;
+      if (Number.isFinite(ys[hi_])) dot(hi_);
+    } else if (Number.isFinite(ys[n - 1])) dot(n - 1);
+    if (valEl) valEl.textContent = BE.fmt(ys[hi_ != null ? hi_ : n - 1]);
+  }
+
+  function renderTable() {
+    const host = $("#table-host");
+    host.hidden = !ui.table;
+    host.replaceChildren();
+    if (!ui.table || !sim) return;
+    const list = plotList();
+    const rows = 21, n = sim.T.length;
+    const tbl = h("table", { class: "data" });
+    const head = h("tr", null, h("th", null, "t (s)"));
+    list.forEach((v) => head.append(h("th", null, v.name)));
+    tbl.append(h("thead", null, head));
+    const body = h("tbody");
+    for (let r = 0; r < rows; r++) {
+      const i = Math.round((r / (rows - 1)) * (n - 1));
+      const tr = h("tr", null, h("td", null, BE.fmt(sim.T[i])));
+      list.forEach((v) => tr.append(h("td", null, BE.fmt(seriesOf(v.index)[i]))));
+      body.append(tr);
+    }
+    tbl.append(body);
+    host.append(h("div", { class: "table-wrap" }, tbl));
+  }
+
+  function copyCSV() {
+    if (!sim) { toast("Nothing to copy yet."); return; }
+    const list = plotList();
+    const n = sim.T.length, every = Math.max(1, Math.ceil(n / 2001));
+    const lines = [["t", ...list.map((v) => v.name)].join(",")];
+    for (let i = 0; i < n; i += every) lines.push([sim.T[i], ...list.map((v) => seriesOf(v.index)[i])].map((x) => +x.toPrecision(10)).join(","));
+    copyText(lines.join("\n"), `Copied ${lines.length - 1} rows of CSV.`);
+  }
+  function copyText(text, ok) {
+    const fallback = () => toast("Copy isn't allowed here. Select the text and copy it yourself.");
+    try {
+      navigator.clipboard.writeText(text).then(() => toast(ok), fallback);
+    } catch (_) { fallback(); }
+  }
+
+  // ------------------------------------------------------------------ modal & toast
+  let toastTimer = 0;
+  function toast(text) {
+    const t = $("#toast");
+    t.textContent = text; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
+  }
+  function openModal(build) {
+    const card = $("#modal-card");
+    card.replaceChildren();
+    build(card);
+    $("#modal").hidden = false;
+    const f = card.querySelector("textarea, button");
+    if (f) f.focus();
+  }
+  function closeModal() { $("#modal").hidden = true; $("#modal-card").replaceChildren(); }
+
+  function showExport() {
+    const text = BE.toBond(graph, settings);
+    openModal((card) => {
+      const ta = h("textarea", { readOnly: true, spellcheck: false, "aria-label": ".bond file contents" });
+      ta.value = text;
+      card.append(h("h2", null, "Export .bond"),
+        h("p", null, "Save this as a ", h("code", null, ".bond"), " file and run ", h("code", null, "python3 bondgraph.py model.bond"),
+          " for the symbolic state equations. The ", h("code", null, "#@"), " comment lines keep positions and values for the editor; the CLI ignores them."),
+        ta,
+        h("div", { class: "row" }, h("button", { class: "btn", type: "button", onclick: closeModal }, "Close"),
+          h("button", { class: "btn primary", type: "button", onclick: () => { ta.select(); copyText(text, "Copied the .bond file."); } }, "Copy to clipboard")));
+    });
+  }
+  function showImport() {
+    openModal((card) => {
+      const ta = h("textarea", { spellcheck: false, "aria-label": ".bond file to import", placeholder: "junction node 0: Is-, C1+, R1+\n\nelement Is Sf value=u(t)\nelement C1 C C=C\nelement R1 R R=R" });
+      const err = h("div", { class: "err", hidden: true });
+      const file = h("input", { type: "file", accept: ".bond,.txt,text/plain", "aria-label": "Open a .bond file", onchange: (e) => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        const rd = new FileReader(); rd.onload = () => { ta.value = String(rd.result); }; rd.readAsText(f);
+      } });
+      const go = () => {
+        try {
+          const { graph: g, settings: s } = BE.fromBond(ta.value);
+          pushHistory();
+          graph = g; settings = Object.assign({ tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} }, s);
+          plots = { hidden: [], extra: [] }; nextNode = 1; nextBond = 1; fixCounters();
+          closeModal(); afterLoad(true); toast(`Imported ${g.nodes.length} nodes and ${g.bonds.length} bonds.`);
+        } catch (e) { err.hidden = false; err.textContent = e.message; }
+      };
+      card.append(h("h2", null, "Import .bond"),
+        h("p", null, "Paste a .bond file or open one. Files exported from here keep their layout; others are arranged automatically."),
+        file, ta, err,
+        h("div", { class: "row" }, h("button", { class: "btn", type: "button", onclick: closeModal }, "Cancel"),
+          h("button", { class: "btn primary", type: "button", onclick: go }, "Import")));
+    });
+  }
+
+  // ------------------------------------------------------------------ view
+  function fitView() {
+    const wrap = $("#wrap"), W = wrap.clientWidth, H = wrap.clientHeight;
+    if (!graph.nodes.length || !W || !H) { view.x = 40; view.y = 20; view.k = 1; render(); return; }
+    const xs = graph.nodes.map((n) => n.x), ys = graph.nodes.map((n) => n.y);
+    const x0 = Math.min(...xs) - 90, x1 = Math.max(...xs) + 90, y0 = Math.min(...ys) - 60, y1 = Math.max(...ys) + 60;
+    view.k = Math.max(0.35, Math.min(1.4, Math.min(W / (x1 - x0), H / (y1 - y0))));
+    view.x = (W - (x1 - x0) * view.k) / 2 - x0 * view.k;
+    view.y = (H - (y1 - y0) * view.k) / 2 - y0 * view.k;
+    render();
+  }
+  function zoomAt(f, cx, cy) {
+    const k = Math.max(0.3, Math.min(3, view.k * f));
+    view.x = cx - ((cx - view.x) * k) / view.k;
+    view.y = cy - ((cy - view.y) * k) / view.k;
+    view.k = k;
+    render();
+  }
+  function afterLoad(fit) {
+    closePopover(); ui.sel = null;
+    $("#t-end").value = settings.tEnd; $("#t-steps").value = settings.steps;
+    for (const k in listKeys) delete listKeys[k];
+    chartSig = "";
+    sim = null; series = new Map();
+    if (fit) fitView();
+    changed();
+  }
+  function setTool(t) {
+    ui.tool = t; ui.placing = null;
+    document.querySelectorAll("[data-tool]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tool === t)));
+    document.querySelectorAll("[data-place]").forEach((b) => b.setAttribute("aria-pressed", "false"));
+    $("#wrap").classList.toggle("bonding", t === "bond");
+    $("#wrap").classList.remove("placing");
+    render();
+  }
+  function startPlacing(kind) {
+    ui.placing = kind;
+    document.querySelectorAll("[data-place]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.place === kind)));
+    $("#wrap").classList.add("placing");
+    render();
+  }
+
+  // ------------------------------------------------------------------ pointer input
+  const svg = $("#canvas");
+  const hitNode = (target) => { const g = target.closest && target.closest("[data-node]"); return g ? Number(g.dataset.node) : null; };
+  const hitBond = (target) => { const g = target.closest && target.closest("[data-bond]"); return g ? Number(g.dataset.bond) : null; };
+
+  svg.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const w = toWorld(e.clientX, e.clientY);
+    ui.mouse = w;
+    if (ui.placing) {
+      const kind = ui.placing;
+      ui.placing = null; $("#wrap").classList.remove("placing");
+      document.querySelectorAll("[data-place]").forEach((b) => b.setAttribute("aria-pressed", "false"));
+      const n = addNode(kind, w.x, w.y);
+      openPopover({ type: "node", id: n.id });
+      return;
+    }
+    const nid = hitNode(e.target), bid = hitBond(e.target);
+    svg.setPointerCapture(e.pointerId);
+    if (nid != null) {
+      if (ui.tool === "bond" || e.shiftKey) ui.drag = { type: "bond", from: nid, cur: w, sx: e.clientX, sy: e.clientY };
+      else { const n = nodeById(nid); ui.drag = { type: "move", id: nid, ox: n.x - w.x, oy: n.y - w.y, sx: e.clientX, sy: e.clientY, moved: false }; }
+    } else if (bid != null) ui.drag = { type: "bondclick", id: bid };
+    else ui.drag = { type: "pan", sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, moved: false };
+  });
+  svg.addEventListener("pointermove", (e) => {
+    const w = toWorld(e.clientX, e.clientY);
+    ui.mouse = w;
+    const d = ui.drag;
+    if (!d) { if (ui.placing) drawOverlay(); return; }
+    if (d.type === "move") {
+      if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4) return;
+      if (!d.moved) { d.moved = true; pushHistory(); }
+      const n = nodeById(d.id); n.x = snap(w.x + d.ox); n.y = snap(w.y + d.oy);
+      render();
+    } else if (d.type === "bond") {
+      d.cur = w;
+      const el2 = document.elementFromPoint(e.clientX, e.clientY);
+      const t = el2 ? hitNode(el2) : null;
+      d.target = t != null && t !== d.from ? t : null;
+      drawOverlay();
+    } else if (d.type === "pan") {
+      if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 3) return;
+      d.moved = true; $("#wrap").classList.add("panning");
+      view.x = d.vx + e.clientX - d.sx; view.y = d.vy + e.clientY - d.sy;
+      render();
+    }
+  });
+  const endDrag = (e) => {
+    const d = ui.drag; ui.drag = null;
+    $("#wrap").classList.remove("panning");
+    if (!d) return;
+    if (d.type === "move") {
+      if (d.moved) { changed(); }
+      else { ui.sel = { type: "node", id: d.id }; render(); openPopover({ type: "node", id: d.id }); }
+    } else if (d.type === "bond") {
+      drawOverlay();
+      if (d.target != null) addBond(d.from, d.target);
+      else if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4) { ui.sel = { type: "node", id: d.from }; render(); openPopover({ type: "node", id: d.from }); }
+      else render();
+    } else if (d.type === "bondclick") {
+      ui.sel = { type: "bond", id: d.id }; render(); openPopover({ type: "bond", id: d.id });
+    } else if (d.type === "pan" && !d.moved) {
+      ui.sel = null; closePopover(); render();
+    }
+  };
+  svg.addEventListener("pointerup", endDrag);
+  svg.addEventListener("pointercancel", () => { ui.drag = null; render(); });
+  svg.addEventListener("pointerenter", () => { ui.overCanvas = true; });
+  svg.addEventListener("pointerleave", () => { ui.overCanvas = false; if (ui.placing) { ui.mouse = null; drawOverlay(); } });
+  svg.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = svg.getBoundingClientRect();
+    zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  // ------------------------------------------------------------------ keyboard
+  const KEYMAP = {};
+  for (const k in KIND) KEYMAP[KIND[k].key.toLowerCase()] = k;
+  document.addEventListener("keydown", (e) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
+    if (e.key === "Escape") {
+      if (!$("#modal").hidden) { closeModal(); return; }
+      if (ui.placing) { setTool(ui.tool); return; }
+      if (ui.drag) { ui.drag = null; render(); return; }
+      if (ui.pop) { closePopover(); ui.sel = null; render(); return; }
+    }
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && (e.key === "z" || e.key === "Z") && !typing) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+    if (mod && (e.key === "y") && !typing) { e.preventDefault(); redo(); return; }
+    if (typing || mod || e.altKey || !$("#modal").hidden) return;
+    if (!ui.overCanvas && document.activeElement !== document.body) return;
+    if ((e.key === "Delete" || e.key === "Backspace") && ui.sel) {
+      e.preventDefault();
+      if (ui.sel.type === "node") deleteNode(ui.sel.id); else deleteBond(ui.sel.id);
+      return;
+    }
+    const k = e.key.toLowerCase();
+    if (k === "v") { setTool("select"); return; }
+    if (k === "b") { setTool("bond"); return; }
+    if (KEYMAP[k]) {
+      e.preventDefault();
+      const wrap = $("#wrap").getBoundingClientRect();
+      let at = ui.overCanvas ? ui.mouse : null;
+      if (!at) at = toWorld(wrap.left + wrap.width / 2, wrap.top + wrap.height / 2);
+      const n = addNode(KEYMAP[k], at.x, at.y);
+      openPopover({ type: "node", id: n.id });
+    }
+  });
+
+  // ------------------------------------------------------------------ wiring
+  function buildPalette() {
+    const els = $("#palette-elements"), js = $("#palette-junctions");
+    for (const k of ["Se", "Sf", "C", "I", "R", "TF", "GY", "0", "1"]) {
+      const b = h("button", { class: "tool sym", type: "button", "data-place": k, "aria-pressed": "false",
+        title: `${KIND[k].title} (${KIND[k].key}): ${KIND[k].desc}`, onclick: () => (ui.placing === k ? setTool(ui.tool) : startPlacing(k)) },
+      k);
+      (k === "0" || k === "1" ? js : els).append(b);
+    }
+  }
+  function init() {
+    buildPalette();
+    document.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
+    $("#btn-undo").addEventListener("click", undo);
+    $("#btn-redo").addEventListener("click", redo);
+    $("#zoom-in").addEventListener("click", () => { const w = $("#wrap"); zoomAt(1.2, w.clientWidth / 2, w.clientHeight / 2); });
+    $("#zoom-out").addEventListener("click", () => { const w = $("#wrap"); zoomAt(1 / 1.2, w.clientWidth / 2, w.clientHeight / 2); });
+    $("#zoom-fit").addEventListener("click", fitView);
+    $("#btn-export").addEventListener("click", showExport);
+    $("#btn-import").addEventListener("click", showImport);
+    $("#btn-clear").addEventListener("click", () => {
+      if (!graph.nodes.length) return;
+      pushHistory();
+      graph = { nodes: [], bonds: [] }; plots = { hidden: [], extra: [] };
+      afterLoad(false); toast("Cleared the drawing. Undo brings it back.");
+    });
+    $("#modal").addEventListener("pointerdown", (e) => { if (e.target === $("#modal")) closeModal(); });
+    const exSel = $("#examples");
+    for (const key in EXAMPLES) exSel.append(h("option", { value: key }, EXAMPLES[key][0]));
+    exSel.addEventListener("change", () => {
+      const key = exSel.value; exSel.value = "";
+      if (!key) return;
+      pushHistory();
+      const ex = EXAMPLES[key][1]();
+      graph = ex.graph; settings = Object.assign({ tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} }, ex.settings); plots = ex.plots;
+      nextNode = 1; nextBond = 1; fixCounters();
+      afterLoad(true);
+      toast(`Loaded “${EXAMPLES[key][0]}”.`);
+    });
+    for (const id of ["t-end", "t-steps"]) {
+      const inp = $("#" + id);
+      inp.addEventListener("focus", pushHistory);
+      inp.addEventListener("input", () => { clearTimeout(simTimer); simTimer = setTimeout(runSim, 250); save(); });
+    }
+    $("#add-plot").addEventListener("change", (e) => {
+      const nm = e.target.value; if (!nm) return;
+      if (pm() && pm().states.some((s) => s.name === nm)) plots.hidden = plots.hidden.filter((x) => x !== nm);
+      else plots.extra.push(nm);
+      save(); renderCharts();
+    });
+    $("#btn-table").addEventListener("click", (e) => {
+      ui.table = !ui.table; e.currentTarget.setAttribute("aria-pressed", String(ui.table));
+      renderTable();
+    });
+    $("#btn-csv").addEventListener("click", copyCSV);
+
+    // Resizable split.
+    const div = $("#divider");
+    let dragW = null;
+    div.addEventListener("pointerdown", (e) => { dragW = { x: e.clientX, w: $(".sim").offsetWidth }; div.setPointerCapture(e.pointerId); div.classList.add("drag"); });
+    div.addEventListener("pointermove", (e) => {
+      if (!dragW) return;
+      const w = Math.max(320, Math.min(window.innerWidth * 0.7, dragW.w - (e.clientX - dragW.x)));
+      document.documentElement.style.setProperty("--sim-w", w + "px");
+    });
+    div.addEventListener("pointerup", () => { dragW = null; div.classList.remove("drag"); positionPopover(); drawAllCharts(); try { localStorage.setItem(STORE_KEY + "-w", $(".sim").offsetWidth); } catch (_) {} });
+    div.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const w = $(".sim").offsetWidth + (e.key === "ArrowLeft" ? 24 : -24);
+      document.documentElement.style.setProperty("--sim-w", Math.max(320, w) + "px");
+      drawAllCharts();
+    });
+    try { const w = localStorage.getItem(STORE_KEY + "-w"); if (w) document.documentElement.style.setProperty("--sim-w", w + "px"); } catch (_) {}
+
+    new ResizeObserver(() => { drawAllCharts(); positionPopover(); }).observe($("#charts"));
+    new ResizeObserver(() => render()).observe($("#wrap"));
+    const redrawTheme = () => { render(); drawAllCharts(); };
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redrawTheme);
+    new MutationObserver(redrawTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+    // Open the last drawing, or the mass–spring–damper example.
+    let loaded = false;
+    try {
+      const s = localStorage.getItem(STORE_KEY);
+      if (s) { restore(s); loaded = true; }
+    } catch (_) { loaded = false; }
+    if (!loaded || !graph.nodes.length) {
+      const ex = EXAMPLES.msd[1]();
+      graph = ex.graph; settings = Object.assign({ tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} }, ex.settings); plots = ex.plots;
+      nextNode = 1; nextBond = 1; fixCounters();
+    }
+    syncHistoryButtons();
+    requestAnimationFrame(() => afterLoad(true));
+  }
+  init();
+})();
+</script>

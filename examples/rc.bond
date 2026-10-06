@@ -1,0 +1,6 @@
+# Current source driving an RC low-pass network.
+junction node 0: Is-, C1+, R1+
+
+element Is Sf value=u(t)
+element C1 C C=C
+element R1 R R=R

@@ -1,0 +1,10 @@
+# Armature-controlled DC motor: electrical side -> gyrator -> rotor.
+junction armature 1: V-, Ra+, La+, G.1+
+junction shaft 1: G.2-, J+, b+
+
+element V  Se value=v(t)
+element Ra R  R=R_a
+element La I  I=L_a
+element G  GY n=K_t
+element J  I  I=J
+element b  R  R=b
