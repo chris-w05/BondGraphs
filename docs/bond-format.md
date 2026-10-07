@@ -368,6 +368,50 @@ The tool assigns causality automatically.
 A storage element left in **derivative causality** is reported in the
 causality list and left out of the state vector.
 
+### Reducing derivative causality away
+
+Derivative causality usually means two storage elements compete for one
+variable: two `I`s on a 1-junction (one flow), two `C`s on a 0-junction (one
+effort), or the same pair on either side of a `TF` or `GY`. Before solving, the
+tool reduces the graph the way you would by hand, keeping each step only if it
+leaves fewer elements in derivative causality:
+
+- **Reflect** the `R`, `C` and `I` elements on one side of a two-port onto the
+  other side, then merge the two junctions. Through a `TF` with
+  `g = n` (port 2 reflected onto port 1) or `g = 1/n` (port 1 onto port 2), an
+  `R` becomes `g²R`, an `I` becomes `g²I` and a `C` becomes `C/g²`. Through a
+  `GY`, an `I` becomes a `C` of `I/n²`, a `C` becomes an `I` of `n²C`, and an
+  `R` becomes `n²/R`. Laws written as functions are reflected too.
+- **Combine** the competing pair: inertias on a 1-junction add, and so do
+  capacitances on a 0-junction.
+
+The equations are still in the original states: the combined element's state
+is rewritten in terms of the member that was in integral causality, and the
+other member's state is reported as a function of it. For
+[`fluid_piston.bond`](../examples/fluid_piston.bond) (fluid inertia `If`
+driving a mass `m` through `TF1 n=A`):
+
+```text
+Reduced the graph to remove derivative causality:
+  reflected b, C and m through TF1 onto J1: R_b = A**2*b, C_C = 1/(A**2*k), I_m = A**2*m
+  combined m and If on J1 into one inertia: I = A**2*m + If
+
+States: q_C, p_If
+
+State equations:
+  d(q_C)/dt = A*p_If/If
+  d(p_If)/dt = (-A**2*b*p_If - A*If*k*q_C + If*P(t) - Rf*p_If)/(A**2*m + If)
+
+Storage in derivative causality (follows the states):
+  p_m = A*m*p_If/If
+```
+
+A side is reflected only if it holds nothing but `R`, `C` and `I` elements, and
+only if no law reads `t` or another element's variables (no modulation, no
+`causality=`). Derivative causality that a source forces, such as an `Sf` on a
+1-junction with an `I`, can't be reduced away. That storage just follows the
+source.
+
 The search is exhaustive, so models are limited to **22 ports** in total
 (each one-port counts 1, each TF/GY counts 2). For larger systems, split the
 model.
@@ -389,9 +433,15 @@ State equations:
 
 - **Causality:** what each port imposes on its junction. For `I` and `C`
   ports, `flow` and `effort` respectively mean integral causality.
+- **Reduced the graph:** only when storage was in derivative causality; the
+  reflections and combinations made first (see
+  [Reducing derivative causality away](#reducing-derivative-causality-away)).
 - **States:** the state vector, built from integral-causality storage only.
 - **State equations:** derivatives written in terms of states, inputs and
   parameters.
+- **Storage in derivative causality (follows the states):** after a
+  reduction, each storage element that isn't a state, written in terms of the
+  states.
 - **Unable to eliminate algebraic variables:** SymPy couldn't reduce the
   system. The full equations (each `= 0`) follow so you can see what's left.
   `--show-equations` always prints them.

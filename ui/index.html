@@ -283,6 +283,8 @@ table.data tr:nth-child(even) td { background: var(--bg); }
 .eq-note { margin: 10px 0 0; font-size: 12.5px; color: var(--ink-2); }
 .eq-note.warn { color: var(--warn); }
 .eq-note.bad { color: var(--bad); }
+.eq-steps { margin: 6px 0 0; padding-left: 20px; font-size: 12.5px; color: var(--ink-2); }
+.eq-steps li { margin: 4px 0; }
 .eq-body details { margin-top: 10px; }
 .eq-body summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); }
 
@@ -1517,7 +1519,21 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       window.katex.render("\\begin{aligned}" + o.full.map((s) => s.replace(/ = 0$/, " &= 0")).join(" \\\\ ") + "\\end{aligned}", d, { displayMode: true, throwOnError: false });
     }
     const dependent = graph.nodes.filter((n) => caus.storage[n.id] === "derivative").map((n) => n.name);
-    if (dependent.length) note(`${dependent.join(", ")} ${dependent.length > 1 ? "are" : "is"} in derivative causality, so ${dependent.length > 1 ? "they aren't states" : "it isn't a state"}.`);
+    const many = dependent.length > 1;
+    if (o.reductions && o.reductions.length) {
+      note("Solved after reducing the graph:");
+      const list = h("ul", { class: "eq-steps" });
+      for (const r of o.reductions) {
+        const m = h("span");
+        window.katex.render(r.math, m, { throwOnError: false });
+        list.append(h("li", null, r.text[0].toUpperCase() + r.text.slice(1) + ": ", m));
+      }
+      body.append(list);
+      if (o.dependent.length) {
+        note(`${dependent.join(", ")} ${many ? "are" : "is"} in derivative causality, so ${many ? "they follow" : "it follows"} the states:`);
+        math("\\begin{aligned}" + o.dependent.map((s) => s.replace(" = ", " &= ")).join(" \\\\ ") + "\\end{aligned}");
+      }
+    } else if (dependent.length) note(`${dependent.join(", ")} ${many ? "are" : "is"} in derivative causality, so ${many ? "they aren't states" : "it isn't a state"}.`);
   }
   function copyEq() {
     const o = eq.out;

@@ -1,0 +1,30 @@
+# Bond graph exported from the bond graph editor (ui/index.html).
+
+junction J1 1: F-, TF1.1+, If+, Rf+
+junction J2 1: TF1.2-, b+, C+, m+
+
+element F Se value=P(t)
+element TF1 TF n=A
+element b R R=b
+element C C C=1/k
+element m I I=m
+element If I I=If
+element Rf R R=Rf
+
+# --- editor data (comments; bondgraph.py ignores these) ---
+#@pos F 120 240
+#@pos J1 340 230
+#@pos J2 660 240
+#@pos TF1 510 240
+#@pos b 660 100
+#@pos C 810 250
+#@pos m 660 370
+#@pos If 350 370
+#@pos Rf 350 90
+#@param m=1
+#@param k=4
+#@param b=0.6
+#@param F0=4
+#@param C_Spring=.1
+#@param k_connect=100000
+#@sim tEnd=15 steps=1500

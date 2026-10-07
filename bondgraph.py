@@ -126,6 +126,12 @@ def parse_text(text: str) -> Model:
         required = 2 if elem.kind.upper() in {"TF", "GY"} else 1
         if len(elem.ports) != required or any(not p[0] for p in elem.ports):
             raise ValueError(f"element {elem.name}: needs {required} attached port(s)")
+    return link(m)
+
+
+def link(m: Model) -> Model:
+    """Rebuild m.attachments from the elements' ports."""
+    m.attachments = {}
     for elem in m.elements.values():
         for p, (j, sign) in enumerate(elem.ports, 1):
             m.attachments.setdefault(j, []).append((elem.name, p, sign))
@@ -194,13 +200,41 @@ def sym(value: str, own: dict | None = None):
     return sp.sympify(value.replace("^", "**"), locals={"t": sp.Symbol("t"), **(own or {}), **functions})
 
 
-def derive(m: Model, c, inputs: dict | None = None):
+def derive(m: Model, c, inputs: dict | None = None, reduction: dict | None = None):
     """Return states, their derivatives, the full equations and the solution (None if unsolved).
 
     Source values that don't depend on the system are solved as input symbols.
     Pass a dict as `inputs` to get derivatives in terms of those symbols (it's
     filled with symbol -> (source name, value)); otherwise the values are put back.
+
+    Storage in derivative causality is reduced away first where it can be (see
+    reduce_graph); the states and derivatives are still the original elements'.
+    Pass a dict as `reduction` to get the steps taken ("steps") and each storage
+    element that isn't a state as (its state, value in terms of the states) ("dependent").
     """
+    red = reduce_graph(m, c)
+    if red is None:
+        return derive_graph(m, c, inputs)
+    states, dots, equations, sol = derive_graph(red.model, red.causality, inputs)
+    stuck = set(derivative_storage(m, c))
+    integral = {state_symbol(el) for el in m.elements.values() if el.kind.upper() in {"C", "I"} and el.name not in stuck}
+    order = {state_symbol(el): i for i, el in enumerate(m.elements.values()) if el.kind.upper() in {"C", "I"}}
+    # Each reduced state is a multiple of one original state: keep an integral one.
+    picks, dependent = [], []
+    for x in states:
+        origin = red.origin[x.name[2:]]
+        pick = next((y for y in origin if y in integral), next(iter(origin)))
+        picks.append((pick, origin[pick]))
+        dependent += [(y, sp.simplify(k / origin[pick] * pick)) for y, k in origin.items() if y != pick]
+    swap = {x: pick / k for x, (pick, k) in zip(states, picks)}
+    result = sorted(((pick, sp.simplify(k * d.xreplace(swap))) for (pick, k), d in zip(picks, dots)), key=lambda r: order[r[0]])
+    if reduction is not None:
+        reduction.update(steps=red.steps, dependent=sorted(dependent, key=lambda r: order[r[0]]))
+    return [x for x, _ in result], [d for _, d in result], equations, sol
+
+
+def derive_graph(m: Model, c, inputs: dict | None = None):
+    """derive() without the reduction."""
     e, f, fin = {}, {}, {}
     equations, states, dots = [], [], []
     given: dict = {}
@@ -338,6 +372,183 @@ def storage_causality(m: Model, integral: dict[str, bool]):
     return c
 
 
+def state_symbol(el: Element) -> sp.Symbol:
+    return sp.Symbol(("q_" if el.kind.upper() == "C" else "p_") + el.name)
+
+
+def derivative_storage(m: Model, c) -> list[str]:
+    return [el.name for el in m.elements.values() if (el.kind.upper(), c.get((el.name, 1))) in {("C", "f"), ("I", "e")}]
+
+
+# ------------------------------------------------------------------ reduction
+# Storage in derivative causality is often two I's (or two C's) competing for one
+# flow (or effort), directly or across a TF or GY. Reflecting the elements on one
+# side of the two-port onto the other side and combining the pair leaves a graph
+# with fewer storage elements in derivative causality, solved like any other.
+
+OWN = {v: sp.Symbol(v) for v in "efqp"}  # an element's own variables inside its law
+KAPPA = {1: -1, 2: 1}  # GY: e at port P = KAPPA[P]*n*(inflow at the other port)
+
+
+@dataclass
+class Reduced:
+    model: Model
+    causality: dict | None
+    steps: list  # (what was done, [(name, value)])
+    origin: dict  # storage element -> {original state: k}, where original state = k * this element's state
+
+    def copy(self) -> Reduced:
+        els = {n: Element(el.name, el.kind, dict(el.params), list(el.ports)) for n, el in self.model.elements.items()}
+        return Reduced(Model(dict(self.model.junctions), {}, els), None, list(self.steps),
+                       {n: dict(o) for n, o in self.origin.items()})
+
+
+def law_of(el: Element) -> tuple[str, sp.Expr]:
+    """An R, C or I law as (key, expression in OWN); a coefficient becomes e=R*f, e=q/C or f=p/I."""
+    k = el.kind.upper()
+    form = next((f for f in LAW_FORMS[k] if f in el.params), k)
+    if form != k:
+        return form, sym(el.params[form], OWN)
+    coef = sym(el.params.get(k, f"{k}_{el.name}"))
+    return {"R": ("e", coef * OWN["f"]), "C": ("e", OWN["q"] / coef), "I": ("f", OWN["p"] / coef)}[k]
+
+
+def coefficient(el: Element):
+    """R, C or I of a linear law (e = R*f, q = C*e, p = I*f), else None."""
+    key, law = law_of(el)
+    x, y = {"R": "ef", "C": "qe", "I": "pf"}[el.kind.upper()]
+    if law == 0:
+        return None
+    coef = sp.simplify(law / OWN[y] if key == x else OWN[x] / law)
+    return None if coef.free_symbols & set(OWN.values()) or coef == 0 else coef
+
+
+def plain(el: Element) -> bool:
+    """el's laws don't read t or any element's variables, and its causality isn't fixed."""
+    return "causality" not in el.params and not any(re.search(r"\bt\b|\b[efqp]_\w", v) for v in el.params.values())
+
+
+def read_by_laws(m: Model) -> set[str]:
+    """Elements whose e, f, q or p some law or modulus reads."""
+    words = {w for el in m.elements.values() for v in el.params.values() for w in re.findall(r"\b[efqp]_(\w+)", v)}
+    return {w if w in m.elements else re.sub(r"_[12]$", "", w) for w in words}
+
+
+def join_names(els) -> str:
+    names = [el.name for el in els]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def combine(r: Reduced, j: str) -> Reduced | None:
+    """Merge the I's on a 1-junction (one flow) or the C's on a 0-junction (one effort) into one."""
+    m = r.model
+    kind = "I" if m.junctions[j] == "1" else "C"
+    group = [m.elements[n] for n, _, _ in m.attachments.get(j, []) if m.elements[n].kind.upper() == kind]
+    if len(group) < 2 or not all(map(plain, group)) or read_by_laws(m) & {el.name for el in group}:
+        return None
+    coefs = [coefficient(el) for el in group]
+    if None in coefs:
+        return None
+    total = sp.simplify(sum(coefs))  # inertias sharing a flow add, and so do capacitances sharing an effort
+    out = r.copy()
+    name = "_".join(el.name for el in group)
+    while name in m.elements:
+        name += "_"
+    origin = {}
+    for el, coef in zip(group, coefs):
+        # p_k = sign_k*I_k*f on a 1-junction; q_k = C_k*e on a 0-junction
+        scale = coef / total * (el.ports[0][1] if kind == "I" else 1)
+        origin.update({x: sp.simplify(k * scale) for x, k in out.origin.pop(el.name).items()})
+        del out.model.elements[el.name]
+    out.model.elements[name] = Element(name, kind, {kind: str(total)}, [(j, 1)])
+    out.origin[name] = origin
+    out.steps.append((f"combined {join_names(group)} on {j} into one {'inertia' if kind == 'I' else 'capacitor'}",
+                      [(kind, total)]))
+    link(out.model)
+    return out
+
+
+def reflect(r: Reduced, T: Element, P: int) -> Reduced | None:
+    """Move the R, C and I on T's far junction (port 3-P) across T onto its near one, merging the two junctions."""
+    m, Q = r.model, 3 - P
+    (near, a), (far, b) = T.ports[P - 1], T.ports[Q - 1]
+    gy = T.kind.upper() == "GY"
+    if near == far or (m.junctions[near] == m.junctions[far]) == gy:  # a TF joins like junctions, a GY unlike
+        return None
+    moved = [m.elements[n] for n, _, _ in m.attachments[far] if n != T.name]
+    if (not moved or not plain(T) or not all(map(plain, moved)) or any(el.kind.upper() not in {"R", "C", "I"} for el in moved)
+            or read_by_laws(m) & {T.name, *(el.name for el in moved)}):
+        return None
+    n = sym(T.params.get("n", "n_" + T.name))
+    out = r.copy()
+    del out.model.elements[T.name], out.model.junctions[far]
+    laws = []
+    for el in moved:
+        s = el.ports[0][1]
+        # sub: far variable -> (near variable, k) with far = k * near
+        if gy:  # efforts and flows swap, so I <-> C
+            sigma = KAPPA[P] * b * s if m.junctions[far] == "1" else 1
+            sign = KAPPA[Q] * a if m.junctions[far] == "0" else 1
+            sub = {"e": ("f", sigma * n), "f": ("e", sigma / n), "p": ("q", sigma * n), "q": ("p", sigma / n)}
+            kind = {"R": "R", "C": "I", "I": "C"}[el.kind.upper()]
+        else:  # e1 = n*e2, f2 = n*f1
+            g = n if Q == 2 else 1 / n
+            sign = -s * a * b
+            sub = {"e": ("e", 1 / g), "f": ("f", g), "q": ("q", g), "p": ("p", 1 / g)}
+            kind = el.kind.upper()
+        key, law = law_of(el)
+        new_key, k = sub[key]
+        law = sp.simplify(law.xreplace({OWN[v]: kv * OWN[w] for v, (w, kv) in sub.items()}) / k)
+        new = out.model.elements[el.name] = Element(el.name, kind, {new_key: str(law)}, [(near, sign)])
+        if el.kind.upper() != "R":
+            k = sub["q" if el.kind.upper() == "C" else "p"][1]
+            out.origin[el.name] = {x: sp.simplify(kx * k) for x, kx in out.origin[el.name].items()}
+        coef = coefficient(new)
+        laws.append((f"{kind}_{el.name}", coef) if coef is not None else
+                    (f"{new_key}_{el.name}", law.xreplace({OWN[v]: sp.Symbol(f"{v}_{el.name}") for v in OWN})))
+    out.steps.append((f"reflected {join_names(moved)} through {T.name} onto {near}", laws))
+    link(out.model)
+    return out
+
+
+def reductions(r: Reduced):
+    for j in r.model.junctions:
+        yield combine(r, j)
+    for T in r.model.elements.values():
+        if T.kind.upper() in {"TF", "GY"}:
+            for P in (1, 2):
+                moved = reflect(r, T, P)
+                yield moved and combine(moved, T.ports[P - 1][0])
+
+
+def reduce_graph(m: Model, c) -> Reduced | None:
+    """Reflect and combine storage while that leaves fewer elements in derivative causality.
+
+    None when nothing is in derivative causality or no reduction helps.
+    """
+    stuck = len(derivative_storage(m, c))
+    best = Reduced(m, c, [], {el.name: {state_symbol(el): sp.Integer(1)}
+                              for el in m.elements.values() if el.kind.upper() in {"C", "I"}})
+    while stuck:
+        for trial in filter(None, reductions(best)):
+            try:
+                trial.causality = causality(trial.model)
+            except ValueError:
+                continue
+            left = len(derivative_storage(trial.model, trial.causality))
+            if left < stuck:
+                best, stuck = trial, left
+                break
+        else:
+            break
+    return best if best.steps else None
+
+
+def describe(step) -> str:
+    text, laws = step
+    return f"{text}: " + ", ".join(f"{name} = {value}" for name, value in laws)
+
+
 def state_space(states, dots, inputs):
     """A, B, d with dots = A*x + B*u + d, or None if dots aren't linear in x and u."""
     x, u, f = sp.Matrix(states), sp.Matrix(len(inputs), 1, list(inputs)), sp.Matrix(dots)
@@ -384,7 +595,8 @@ def tex_column(items) -> str:
 def latex_report(m: Model, c) -> dict:
     """The state equations as LaTeX, one per state and in matrix form, for --latex and the editor."""
     given: dict = {}
-    states, dots, eqs, sol = derive(m, c, given)
+    reduction: dict = {}
+    states, dots, eqs, sol = derive(m, c, given, reduction)
     values = {u: value for u, (_, value) in given.items()}
     pairs = [(tex_name(str(x), dot=True), tex(d.xreplace(values))) for x, d in zip(states, dots)]
     out = {
@@ -394,6 +606,9 @@ def latex_report(m: Model, c) -> dict:
         "solved": sol is not None,
         "full": [tex(eq) + " = 0" for eq in eqs],
         "matrix": None, "linear": False, "inputs": [],
+        "reductions": [{"text": text, "math": r",\quad ".join(f"{tex_name(name)} = {tex(value)}" for name, value in laws)}
+                       for text, laws in reduction.get("steps", [])],
+        "dependent": [f"{tex_name(str(x))} = {tex(value)}" for x, value in reduction.get("dependent", [])],
     }
     if not states or sol is None:
         return out
@@ -437,24 +652,35 @@ def main():
             if args.json:
                 print(json.dumps(latex, indent=2)); return
             print(latex["separate"] if args.latex == "equations" else latex["matrix"] or latex["separate"])
+            for line in [f"{step['text']}: {step['math']}" for step in latex["reductions"]] + latex["dependent"]:
+                print("% " + line)
             if not latex["solved"]:
                 sys.exit("Unable to eliminate algebraic variables; run without --latex for the full equations.")
             return
-        states, dots, eqs, sol = derive(m, c)
+        reduction: dict = {}
+        states, dots, eqs, sol = derive(m, c, reduction=reduction)
     except (OSError, ValueError, sp.SympifyError) as exc:
         sys.exit(f"Error: {exc}")
-    report = {"causality": {f"{n}.{p}": v for (n,p),v in c.items()}, "states": [str(x) for x in states], "state_equations": [f"d({x})/dt = {y}" for x,y in zip(states,dots)]}
+    report = {"causality": {f"{n}.{p}": v for (n,p),v in c.items()}, "states": [str(x) for x in states], "state_equations": [f"d({x})/dt = {y}" for x,y in zip(states,dots)],
+              "reductions": [describe(step) for step in reduction.get("steps", [])],
+              "dependent_states": [f"{x} = {y}" for x, y in reduction.get("dependent", [])]}
     if args.json:
         print(json.dumps(report, indent=2)); return
     print("Causality (element port -> quantity caused onto junction):")
     for key, value in report["causality"].items(): print(f"  {key}: {value}ffort" if value == "e" else f"  {key}: flow")
+    if report["reductions"]:
+        print("\nReduced the graph to remove derivative causality:")
+        for line in report["reductions"]: print("  " + line)
     print("\nStates:", ", ".join(report["states"]) or "none (all storage has derivative causality)")
     print("\nState equations:")
     for line in report["state_equations"]: print("  " + line)
+    if report["dependent_states"]:
+        print("\nStorage in derivative causality (follows the states):")
+        for line in report["dependent_states"]: print("  " + line)
     if sol is None:
         print("  Unable to eliminate algebraic variables; full equations follow.")
     if args.show_equations or sol is None:
-        print("\nFull equations (each equals zero):")
+        print("\nFull equations" + (" of the reduced graph" if report["reductions"] else "") + " (each equals zero):")
         for equation in eqs: print("  " + str(equation))
 
 

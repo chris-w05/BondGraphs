@@ -4,6 +4,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import bondgraph as bg
+import sympy as sp
 
 
 class BondGraphTests(unittest.TestCase):
@@ -115,6 +116,49 @@ class BondGraphTests(unittest.TestCase):
                           "element C1 C C=C1\nelement C2 C C=C2\nelement R1 R R=R\n")
         states, _, _, _ = bg.derive(m, bg.storage_causality(m, {"C1": False, "C2": True}))
         self.assertEqual([str(s) for s in states], ["q_C2"])
+
+    def reduce_text(self, text):
+        m = bg.parse_text(text)
+        reduction = {}
+        states, dots, _, solution = bg.derive(m, bg.causality(m), reduction=reduction)
+        self.assertIsNotNone(solution)
+        return dict(zip(states, dots)), reduction
+
+    def assertSame(self, a, b):
+        self.assertEqual(sp.simplify(sp.sympify(a) - sp.sympify(b, locals={"P": sp.Function("P"), "v": sp.Function("v")})), 0, f"{a} != {b}")
+
+    def test_inertias_across_a_transformer_are_combined(self):
+        m = bg.parse(str(Path(__file__).parents[1] / "examples" / "fluid_piston.bond"))
+        reduction = {}
+        states, dots, _, solution = bg.derive(m, bg.causality(m), reduction=reduction)
+        self.assertIsNotNone(solution)
+        eqs = dict(zip(map(str, states), dots))
+        self.assertEqual(list(eqs), ["q_C", "p_If"])  # the original states; m follows If
+        self.assertSame(eqs["q_C"], "A*p_If/If")
+        self.assertSame(eqs["p_If"], "If*(P(t) - (Rf + A**2*b)*p_If/If - A*k*q_C)/(If + A**2*m)")
+        self.assertEqual([text for text, _ in reduction["steps"]],
+                         ["reflected b, C and m through TF1 onto J1", "combined m and If on J1 into one inertia"])
+        [(x, value)] = reduction["dependent"]
+        self.assertEqual(str(x), "p_m")
+        self.assertSame(value, "A*m*p_If/If")
+
+    def test_capacitor_across_a_gyrator_becomes_an_inertia(self):
+        eqs, reduction = self.reduce_text("junction a 1: V-, L+, R1+, G.1+\njunction b 0: G.2-, Cc+, R2+\n"
+                                          "element V Se value=v(t)\nelement G GY n=K\nelement L I I=L\n"
+                                          "element R1 R R=R1\nelement Cc C C=Cc\nelement R2 R R=R2\n")
+        self.assertEqual(list(map(str, eqs)), ["p_L"])
+        self.assertSame(list(eqs.values())[0], "L*(v(t) - (R1 + K**2/R2)*p_L/L)/(L + K**2*Cc)")
+        self.assertSame(reduction["dependent"][0][1], "Cc*K*p_L/L")
+
+    def test_parallel_capacitors_are_combined(self):
+        eqs, reduction = self.reduce_text("junction n 0: S-, C1+, C2+, R1+\nelement S Sf value=u(t)\n"
+                                          "element C1 C C=C1\nelement C2 C C=C2\nelement R1 R R=R\n")
+        self.assertSame(eqs[sp.Symbol("q_C1")], "C1*(u(t) - q_C1/(C1*R))/(C1 + C2)")
+        self.assertSame(reduction["dependent"][0][1], "C2*q_C1/C1")
+
+    def test_derivative_causality_a_source_forces_is_left_alone(self):
+        m = bg.parse_text("junction j 1: S-, L+, R1+\nelement S Sf value=u(t)\nelement L I I=L\nelement R1 R R=R\n")
+        self.assertIsNone(bg.reduce_graph(m, bg.causality(m)))
 
     def test_invalid_graph_is_rejected(self):
         path = Path(__file__).parent / "bad.bond"
