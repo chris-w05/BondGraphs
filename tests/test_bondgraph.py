@@ -218,6 +218,31 @@ class BondGraphTests(unittest.TestCase):
         self.assertEqual(out["unsolved_outputs"], ["Qo"])
         self.assertIsNone(out["matrix"])
 
+    def test_integral_output_is_a_new_state(self):
+        m = bg.parse_text("junction a 1: V-, L+, R1+\nelement V Se value=v(t)\nelement L I I=L\nelement R1 R R=R\n"
+                          "output q_L = integral(f_L)\noutput pw = q_L*e_R1\noutput w = integral(pw + f_L)\n")
+        outputs = {}
+        states, dots, _, solution = bg.derive(m, bg.causality(m), outputs=outputs)
+        self.assertIsNotNone(solution)
+        self.assertEqual([str(s) for s in states], ["p_L", "q_L", "w"])
+        self.assertSame(dots[1], "p_L/L")
+        self.assertSame(dots[2], "R*p_L*q_L/L + p_L/L")  # pw is substituted; q_L is the new state
+        self.assertEqual(list(outputs), ["pw"])
+        self.assertSame(outputs["pw"], "R*p_L*q_L/L")
+
+    def test_integral_output_in_latex(self):
+        m = bg.parse_text(self.SERIES_RC + "output q = integral(f_C1)\n")
+        out = bg.latex_report(m, bg.causality(m))
+        self.assertEqual([p[0] for p in out["equations"]], [r"\dot{q}_{\mathrm{C1}}", r"\dot{q}"])
+        self.assertTrue(out["linear"] and out["outputs"] == [])
+
+    def test_output_mistakes_are_rejected(self):
+        for text, why in (("output a = b\noutput b = a\n", "depend on each other"),
+                          ("output a = 2*integral(f_R1)\n", "whole output on its own")):
+            m = bg.parse_text("junction a 1: V-, R1+\nelement V Se value=1\nelement R1 R R=1\n" + text)
+            with self.assertRaisesRegex(ValueError, why):
+                bg.derive(m, bg.causality(m), outputs={})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -239,6 +239,24 @@ test("outputs follow the response, and a broken one doesn't stop it", () => {
   assert.ok(r.Y[3].every(Number.isNaN));
 });
 
+test("an integral output is a state with its own initial value", () => {
+  // Series RL from 2 V, L/R = 1: i = 2/R (1 - e^-t), and the charge through it is its integral.
+  const g = G([["V", "Se", { value: "2" }], ["a", "1"], ["R1", "R", { R: "1" }], ["L1", "I", { I: "1" }]], ["V>a", "a>R1", "a>L1"]);
+  g.outputs = [{ name: "pw", expr: "k*e_R1*f_R1" }, { name: "q", expr: "integral(f_L1)" }, { name: "wasted", expr: "integral( pw )" },
+    { name: "loopA", expr: "loopB" }, { name: "loopB", expr: "loopA" }, { name: "nested", expr: "2*integral(f_L1)" }];
+  const { r, val } = run(g, { tEnd: 5, steps: 4000, params: { k: "3" }, init: { q: "10" } });
+  assert.deepEqual(r.model.states.map((s) => s.name), ["p_L1", "q", "wasted"]);
+  const y = (name) => r.Y[r.model.outputs.findIndex((o) => o.name === name)];
+  const end = (name) => y(name)[y(name).length - 1];
+  near(end("q"), 10 + 2 * (5 - (1 - Math.exp(-5))), 2e-3, "q(5) = 10 + integral of i");
+  near(y("q")[0], 10, 1e-9, "q starts at its initial value");
+  near(end("wasted"), 3 * 4 * (5 - 2 * (1 - Math.exp(-5)) + (1 - Math.exp(-10)) / 2), 5e-2, "an integral of another output");
+  assert.match(r.model.outputs[3].error, /loop/);
+  assert.match(r.model.outputs[5].error, /whole output/);
+  assert.ok(r.Y[5].every(Number.isNaN));
+  assert.deepEqual(r.model.params, ["k"]);
+});
+
 test("outputs survive .bond export and import", () => {
   const g = G([["Is", "Sf", { value: "1" }], ["n", "0"], ["C1", "C", { C: "C" }]], ["Is>n", "n>C1"]);
   g.outputs = [{ name: "v", expr: " q_C1 / C " }, { name: "unfinished", expr: "" }];

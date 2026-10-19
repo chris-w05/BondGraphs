@@ -394,7 +394,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       <div id="table-host" hidden></div>
       <section class="sec" id="sec-outputs" hidden>
         <h3>Outputs</h3>
-        <p class="lead">Plotted above and written in terms of the states in the equations window, as y = Cx + Du. Pick a variable, or write an expression such as <code>p_m/m</code> or <code>e_R1*f_R1</code>.</p>
+        <p class="lead">Plotted above and written in terms of the states in the equations window, as y = Cx + Du. Pick a variable, or write an expression such as <code>p_m/m</code> or <code>e_R1*f_R1</code>, which may use other outputs' names. <code>integral(f_L1)</code> is the integral from 0, such as the charge through an inductor. It's a new state, with an initial value of its own.</p>
         <div class="outs" id="outputs"></div>
         <select class="btn small add" id="add-output" aria-label="Add an output"><option value="">Add an output…</option></select>
       </section>
@@ -559,7 +559,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       ["G", "GY", 400, 240, { n: "K_t" }], ["shaft", "1", 560, 240], ["J", "I", 560, 100, { I: "J" }], ["b", "R", 560, 380, { R: "b" }],
     ], ["V>arm", "arm>Ra", "arm>La", "arm>G.1", "G.2>shaft", "shaft>J", "shaft>b"],
     { tEnd: 3, steps: 1500, params: { R_a: "1", L_a: "0.05", K_t: "0.5", J: "0.1", b: "0.05" }, inputs: { v: "12" } },
-    [{ name: "i", expr: "f_La" }, { name: "omega", expr: "f_J" }])],
+    [{ name: "i", expr: "f_La" }, { name: "omega", expr: "f_J" }, { name: "theta", expr: "integral(omega)" }])],
     tank: ["Tank with overflow (piecewise)", () => example([
       ["Qin", "Sf", 120, 240, { value: "Q_in" }], ["tank", "0", 300, 240], ["Tank", "C", 300, 100, { C: "A/(rho*g)" }],
       ["Outlet", "R", 480, 240, { R: "Piecewise((R_low,q_Tank>V_max),(R_high,True))" }],
@@ -1192,6 +1192,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     renderKV("params", "sec-params", m.params.map((n) => ({ name: n, label: n + " =" })),
       (n) => settings.params[n] ?? "", (n, v) => { settings.params[n] = v; }, { placeholder: "1" });
     renderKV("inits", "sec-init", m.states.map((s) => {
+      if (s.aux) return { name: s.name, label: s.name + "(0) =", note: `integral output, ${s.arg.trim()}`, disabled: "" };
       const node = nodeById(s.node);
       const dep = caus.storage[s.node] === "derivative";
       return { name: s.name, label: s.name + "(0) =", note: `${node.kind === "C" ? "displacement" : "momentum"} of ${node.name}`, disabled: dep ? "set by the other states" : "" };
@@ -1218,7 +1219,8 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (BE.RESERVED[name] || name === "t") return `${name} is reserved; pick another name.`;
     if (graph.outputs.some((o, j) => j !== except && o.name === name)) return `${name} is already an output.`;
     const m = setupModel;
-    if (m && (m.sym.has(name) || m.params.includes(name) || m.inputs.includes(name))) return `${name} is already a name in the graph.`;
+    const own = except >= 0 && graph.outputs[except].name === name; // an integral output is a state under its own name
+    if (m && ((m.sym.has(name) && !own) || m.params.includes(name) || m.inputs.includes(name))) return `${name} is already a name in the graph.`;
     return "";
   }
   // Outputs don't change the causality: re-simulate for the plots and re-solve for the equations.
@@ -1233,7 +1235,10 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     while (outputNameProblem("y" + k, -1)) k++;
     graph.outputs.push({ name: "y" + k, expr });
     renderOutputs(); outputsChanged(true);
-    if (!expr) $(`#outputs [data-out="${graph.outputs.length - 1}"]`).focus();
+    if (!expr || expr === "integral()") {
+      const inp = $(`#outputs [data-out="${graph.outputs.length - 1}"]`);
+      inp.focus(); inp.setSelectionRange(expr.length - 1, expr.length - 1); // inside the brackets
+    }
   }
   function removeOutput(i) {
     pushHistory();
@@ -1249,6 +1254,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (why) return why;
     pushHistory();
     plots.hidden = plots.hidden.map((k) => (k === OUT + o.name ? OUT + name : k));
+    if (o.name in settings.init) { settings.init[name] = settings.init[o.name]; delete settings.init[o.name]; }
     o.name = name;
     renderOutputs(); outputsChanged(true);
     return "";
@@ -1280,7 +1286,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       showOutputError(i);
     });
     const sel = $("#add-output");
-    sel.replaceChildren(h("option", { value: "" }, "Add an output…"), h("option", { value: "=" }, "Write an expression…"));
+    sel.replaceChildren(h("option", { value: "" }, "Add an output…"), h("option", { value: "=" }, "Write an expression…"), h("option", { value: "∫" }, "Integral of an expression…"));
     if (setupModel) appendGroups(sel, variableGroups(setupModel).map(([label, names]) => [label, names.map((nm) => [nm, nm])]));
   }
   // An empty expression is still being written, so it isn't flagged.
@@ -1317,7 +1323,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   const plotInfo = (key) => (key.startsWith(OUT) ? outputInfo(key.slice(OUT.length)) : varInfo(key));
   function plotList() {
     const m = pm(); if (!m) return [];
-    const keys = m.states.map((s) => s.name).concat(m.outputs.map((o) => OUT + o.name)).filter((k) => !plots.hidden.includes(k));
+    const keys = m.states.filter((s) => !s.aux).map((s) => s.name).concat(m.outputs.map((o) => OUT + o.name)).filter((k) => !plots.hidden.includes(k));
     for (const x of plots.extra) if (m.sym.has(x) && !keys.includes(x)) keys.push(x);
     return keys.map(plotInfo).filter(Boolean);
   }
@@ -1387,7 +1393,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   }
   // The model's variables as [label, names] groups for a picker.
   function variableGroups(m) {
-    const groups = [["States", m.states.map((s) => s.name)], ["Efforts", []], ["Flows", []]];
+    const groups = [["States", m.states.filter((s) => !s.aux).map((s) => s.name)], ["Efforts", []], ["Flows", []]];
     m.symInfo.forEach((info) => {
       if (!info) return;
       if (info.kind === "effort") groups[1][1].push(info.name);
@@ -1961,7 +1967,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     });
     $("#add-output").addEventListener("change", (e) => {
       const v = e.target.value; e.target.value = "";
-      if (v) addOutput(v === "=" ? "" : v);
+      if (v) addOutput(v === "=" ? "" : v === "∫" ? "integral()" : v);
     });
     $("#btn-table").addEventListener("click", (e) => {
       ui.table = !ui.table; e.currentTarget.setAttribute("aria-pressed", String(ui.table));

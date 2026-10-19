@@ -265,6 +265,18 @@
     return forms.find((k) => node.law && node.law[k] !== undefined) || forms[0];
   }
 
+  // The inside of integral(...) when that is a whole output expression, else null.
+  function integralArg(src) {
+    const m = /^\s*integral\s*\(/.exec(String(src));
+    if (!m) return null;
+    let depth = 0;
+    for (let i = m[0].length - 1; i < src.length; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")" && --depth === 0) return src.slice(i + 1).trim() ? null : src.slice(m[0].length, i);
+    }
+    return null;
+  }
+
   function stateName(node) {
     return node.kind === "C" ? "q_" + node.name : node.kind === "I" ? "p_" + node.name : null;
   }
@@ -497,6 +509,15 @@
       sym.set(name, i);
       symInfo[i] = { name, kind: "state", node: n.id };
     }
+    // An output written integral(expr) is one more state, named after the output.
+    for (const o of graph.outputs || []) {
+      const arg = integralArg(o.expr);
+      if (arg === null || !/^[A-Za-z_]\w*$/.test(o.name) || sym.has(o.name)) continue;
+      const i = 2 * nB + states.length;
+      states.push({ node: null, name: o.name, index: i, kind: "integral", aux: true, arg });
+      sym.set(o.name, i);
+      symInfo[i] = { name: o.name, kind: "integral" };
+    }
     const N = 2 * nB + states.length;
 
     // Parameters & inputs referenced by the laws.
@@ -517,19 +538,33 @@
         errors.push({ node: n.id, msg: `${n.name}: ${err.message}` });
       }
     }
-    // Outputs use the same names as the laws. One that can't be read keeps its
-    // error to itself and gives no values; the simulation still runs.
+    // Outputs use the same names as the laws, and each other's. One that can't be
+    // read keeps its error to itself and gives no values; the simulation still runs.
+    // An integral output is a state: its fn is the integrand.
+    const outNames = new Set((graph.outputs || []).map((o) => o.name)), outFns = new Map();
     const outputs = (graph.outputs || []).map((o) => {
-      const out = { name: o.name, expr: o.expr, fn: null, error: "" };
+      const out = { name: o.name, expr: o.expr, fn: null, error: "", refs: [] };
+      const aux = states.find((s) => s.aux && s.name === o.name);
       try {
-        out.ast = parse(o.expr);
+        out.ast = parse(aux ? aux.arg : o.expr);
         checkReserved(out.ast);
         const nm = names(out.ast);
-        nm.ids.forEach((id) => { if (id !== "t" && !sym.has(id)) paramNames.add(id); });
+        if (nm.inputs.has("integral")) throw new SyntaxError("integral(...) must be a whole output on its own; give it an output of its own and use that output's name");
+        nm.ids.forEach((id) => {
+          if (id === "t" || sym.has(id)) return;
+          if (outNames.has(id)) out.refs.push(id); else paramNames.add(id);
+        });
         nm.inputs.forEach((id) => inputNames.add(id));
+        if (aux) out.stateIndex = aux.index;
       } catch (err) { out.error = err.message; }
       return out;
     });
+    const outByName = new Map(outputs.map((o) => [o.name, o]));
+    for (const o of outputs) {
+      const seen = new Set();
+      const loops = (x) => x.refs.some((r) => r === o.name || (!seen.has(r) && seen.add(r) && outByName.has(r) && loops(outByName.get(r))));
+      if (!o.error && loops(o)) o.error = "outputs can't depend on each other in a loop";
+    }
     // Inputs may themselves use parameters.
     const inputAst = new Map();
     for (const name of inputNames) {
@@ -557,6 +592,7 @@
     const resolve = (name) => {
       if (name === "t") return (c) => c.t;
       if (sym.has(name)) { const i = sym.get(name); return (c) => c.v[i]; }
+      if (outNames.has(name)) return (c) => { const f = outFns.get(name); return f ? f(c) : NaN; };
       const i = pIndex.get(name); return (c) => c.P[i];
     };
     const inputFns = new Map();
@@ -586,6 +622,7 @@
     for (const o of outputs) {
       if (!o.error) {
         try { o.fn = compile(o.ast, resolve, callInput); } catch (err) { o.error = err.message; }
+        if (o.fn && o.stateIndex == null) outFns.set(o.name, o.fn);
       }
       delete o.ast;
     }
@@ -641,12 +678,17 @@
       }
     }
     // State derivatives: dq/dt = f_in for C, dp/dt = e for I.
-    const deriv = states.map((st) => {
+    const deriv = states.filter((st) => !st.aux).map((st) => {
       const n = nodes.find((x) => x.id === st.node);
       const b = incident(graph, n.id)[0];
       const s = b.to === n.id ? 1 : -1;
       return n.kind === "C" ? ((j) => (c) => s * c.v[j])(F(b)) : ((j) => (c) => c.v[j])(E(b));
     });
+
+    for (const st of states) if (st.aux) {
+      const o = outByName.get(st.name);
+      deriv.push(o && o.fn && !o.error ? o.fn : () => 0);
+    }
 
     return { N, nB, states, deriv, res, P, params, inputs: [...inputNames].sort(), symInfo, sym, outputs, errors };
   }
@@ -656,7 +698,8 @@
     const c = { v: null, P: model.P, t: 0, fz: null };
     return model.outputs.map((o) => {
       const ys = new Float64Array(X.length).fill(NaN);
-      if (o.fn) for (let i = 0; i < X.length; i++) { c.v = X[i]; c.t = T[i]; ys[i] = o.fn(c); }
+      if (o.stateIndex != null) { if (!o.error) for (let i = 0; i < X.length; i++) ys[i] = X[i][o.stateIndex]; }
+      else if (o.fn) for (let i = 0; i < X.length; i++) { c.v = X[i]; c.t = T[i]; ys[i] = o.fn(c); }
       return ys;
     });
   }

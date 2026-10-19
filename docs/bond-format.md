@@ -456,6 +456,24 @@ in `fluid_piston.bond`, `output F_m = e_m` gives the force on the mass as
 An output that still mentions a bond variable couldn't be solved for; the tool
 says so after the outputs.
 
+### Integrals and other outputs
+
+An output may use other outputs' names, as long as they don't depend on each
+other in a loop. And `integral(expr)` as the **whole** expression of an output is
+the integral of `expr` from time 0. That needs a new state, so the output
+becomes one: it's named after the output, listed under **States**, and has the
+state equation `d(name)/dt = expr`. It isn't printed under **Outputs**.
+
+```text
+output q_L   = integral(f_L)         # charge that has flowed through the inductor
+output power = e_R1 * f_R1
+output waste = integral(power)       # energy dissipated so far
+```
+
+The state starts at 0 (the editor lets you set `name(0)`). `integral` must be
+the whole expression: write `2*integral(f_L)` as one output with the integral
+and a second that uses its name.
+
 ## 10. Reading the output
 
 ```text
@@ -520,6 +538,8 @@ The [editor](../ui/index.html)'s **Equations** window shows the same output.
 |---------|-------------|
 | `line N: expected junction, element, connect, or output` | Typo in a keyword, a missing `:` after the junction type, or a missing `=` in an `output` line. |
 | `line N: duplicate output X` | Two `output` lines share a name. |
+| `outputs X and Y depend on each other` | Outputs use each other's names in a loop. |
+| `integral(...) must be a whole output on its own` | `integral(` appears inside a larger expression; give it an output of its own. |
 | "Unable to write X in terms of the states and inputs" | Output `X` still mentions a bond variable SymPy couldn't eliminate; see [Section 7](#what-works-well-and-what-doesnt). |
 | `line N: expected key=value, got '...'` | A space inside an expression. Remove it. |
 | `line N: R takes R=, e=, f=, causality= not X=` | A key that this kind of element doesn't have; see the [Elements](#3-elements) tables. |

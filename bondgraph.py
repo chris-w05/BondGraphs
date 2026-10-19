@@ -207,7 +207,60 @@ def sym(value: str, own: dict | None = None):
     return sp.sympify(value.replace("^", "**"), locals={"t": sp.Symbol("t"), **(own or {}), **functions})
 
 
+def integral_arg(expr: str) -> str | None:
+    """The inside of integral(...) when that is the whole expression, else None."""
+    mm = re.match(r"\s*integral\s*\(", expr)
+    if not mm:
+        return None
+    depth = 0
+    for i in range(mm.end() - 1, len(expr)):
+        depth += {"(": 1, ")": -1}.get(expr[i], 0)
+        if depth == 0:
+            return None if expr[i + 1:].strip() else expr[mm.end():i]
+    return None
+
+
 def derive(m: Model, c, inputs: dict | None = None, reduction: dict | None = None, outputs: dict | None = None):
+    """derive_states(), plus the outputs that need a state of their own.
+
+    An output written integral(expr) is the integral of expr from 0, so it becomes
+    an extra state (named after the output, with that derivative) and isn't put in
+    `outputs`. Outputs may use each other's names: a plain one is substituted, an
+    integral one is that state.
+    """
+    if outputs is None:
+        return derive_states(m, c, inputs, reduction)
+    plain, integrals = {}, {}
+    for name, expr in m.outputs.items():
+        arg = integral_arg(expr)
+        (plain if arg is None else integrals)[name] = sym(expr if arg is None else arg)
+    for y in [*plain.values(), *integrals.values()]:
+        if any(f.func.__name__ == "integral" for f in y.atoms(AppliedUndef)):
+            raise ValueError("integral(...) must be a whole output on its own; give it an output of its own and use that output's name")
+    work = {**plain, **{"integral " + n: a for n, a in integrals.items()}}
+    states, dots, equations, sol = derive_states(m, c, inputs, reduction, work)
+    done: dict = {}
+
+    def resolve(key, path=()):
+        if key not in done:
+            if key in path:
+                raise ValueError(f"outputs {' and '.join(sorted(set(path)))} depend on each other")
+            done[key] = work[key].xreplace({s: resolve(s.name, path + (key,)) for s in work[key].free_symbols if s.name in plain})
+        return done[key]
+
+    result = {name: resolve(name) for name in plain}
+    extra, extra_dots = [], []
+    for name in integrals:
+        arg = resolve("integral " + name)
+        if unsolved(m, states, {name: arg}):
+            result[name] = arg  # reported as unsolved, like any output
+        else:
+            extra.append(sp.Symbol(name)); extra_dots.append(arg)
+    outputs.update(result)
+    return list(states) + extra, list(dots) + extra_dots, equations, sol
+
+
+def derive_states(m: Model, c, inputs: dict | None = None, reduction: dict | None = None, outputs: dict | None = None):
     """Return states, their derivatives, the full equations and the solution (None if unsolved).
 
     Source values that don't depend on the system are solved as input symbols.
@@ -219,10 +272,10 @@ def derive(m: Model, c, inputs: dict | None = None, reduction: dict | None = Non
     Pass a dict as `reduction` to get the steps taken ("steps") and each storage
     element that isn't a state as (its state, value in terms of the states) ("dependent").
 
-    Pass a dict as `outputs` to get m's outputs (name -> expression) in terms of
-    the states and inputs, as far as they solve (see unsolved).
+    Pass a dict of name -> expression as `outputs`: it's updated in place with
+    each one in terms of the states and inputs, as far as it solves (see unsolved).
     """
-    ys = {name: sym(expr) for name, expr in m.outputs.items()} if outputs is not None else {}
+    ys = dict(outputs or {})
     red = reduce_graph(m, c)
     if red is None:
         result = derive_graph(m, c, inputs, ys)

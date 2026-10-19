@@ -41,7 +41,9 @@ needed) to draw a bond graph instead of typing it:
 - **Outputs:** the **Outputs** section under the plots defines the quantities
   you care about: pick a state, effort or flow, or write any expression in
   them, such as `p_m/m` or `e_R1*f_R1`.  Each output is plotted with the states,
-  and the equations window writes it in terms of the states and inputs.
+  and the equations window writes it in terms of the states and inputs.  An output may use
+  other outputs, and `integral(f_L1)` integrates from zero: it becomes a new
+  state (with its own initial value), such as the charge on an inductor.
 - **Equations:** the **Equations** button opens a window with the solved
   state and output equations, typeset, either one per line or in matrix form
   (`ẋ = A x + B u`, `y = C x + D u`; a nonlinear model is shown as a vector).  **Copy LaTeX**
@@ -119,6 +121,9 @@ output in terms of the states and inputs, after the state equations:
 output v_C = q_C1/C1
 output P_R = e_R1 * f_R1
 ```
+
+An output written `integral(expr)` is a new state, the integral of `expr` from
+zero, such as `output q_L = integral(f_L1)`.  Outputs may use each other's names.
 
 ### Conventions and scope
 
