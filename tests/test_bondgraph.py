@@ -167,6 +167,57 @@ class BondGraphTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bg.causality(bg.parse(str(path)))
 
+    SERIES_RC = "junction a 1: V-, R1+, C1+\nelement V Se value=v(t)\nelement R1 R R=R\nelement C1 C C=C\n"
+
+    def test_outputs_are_parsed(self):
+        m = bg.parse_text(self.SERIES_RC + "output i = f_R1\noutput v_C=e_C1 / 1\n")
+        self.assertEqual(m.outputs, {"i": "f_R1", "v_C": "e_C1 / 1"})
+        with self.assertRaisesRegex(ValueError, "line 2: duplicate output y"):
+            bg.parse_text("output y = 1\noutput y = 2\n")
+
+    def test_outputs_in_terms_of_states_and_inputs(self):
+        m = bg.parse_text(self.SERIES_RC + "output i = f_R1\noutput v_C = e_C1\noutput P = e_R1*f_R1\n")
+        outputs = {}
+        states, _, _, _ = bg.derive(m, bg.causality(m), outputs=outputs)
+        self.assertSame(outputs["i"], "(v(t) - q_C1/C)/R")
+        self.assertSame(outputs["v_C"], "q_C1/C")
+        self.assertSame(outputs["P"], "(v(t) - q_C1/C)**2/R")
+        self.assertEqual(bg.unsolved(m, states, outputs), [])
+
+    def test_outputs_of_a_reduced_graph_use_its_own_bond_variables(self):
+        text = (Path(__file__).parents[1] / "examples" / "fluid_piston.bond").read_text()
+        m = bg.parse_text(text + "output v_m = f_m\noutput F_m = e_m\noutput p = p_m\n")
+        outputs = {}
+        bg.derive(m, bg.causality(m), outputs=outputs)
+        self.assertSame(outputs["v_m"], "A*p_If/If")
+        # m is in derivative causality: the force on it is m * dv/dt
+        self.assertSame(outputs["F_m"], "A*m*(P(t) - (Rf + A**2*b)*p_If/If - A*k*q_C)/(If + A**2*m)")
+        self.assertSame(outputs["p"], "A*m*p_If/If")
+
+    def test_latex_outputs(self):
+        m = bg.parse_text(self.SERIES_RC + "output i = f_R1\noutput v_C = e_C1\n")
+        out = bg.latex_report(m, bg.causality(m))
+        self.assertEqual(out["outputs"], [("i", r"\frac{C v{\left(t \right)} - q_{\mathrm{C1}}}{C R}"),
+                                          ("v_{C}", r"\frac{q_{\mathrm{C1}}}{C}")])
+        self.assertIn(r" \\[1ex]" + "\ni &= ", out["separate"])
+        self.assertTrue(out["linear"] and out["outputs_linear"])
+        self.assertIn(r"\left[\begin{matrix}i \\ v_{C}\end{matrix}\right] = "
+                      r"\left[\begin{matrix}- \frac{1}{C R}\\\frac{1}{C}\end{matrix}\right] \left[\begin{matrix}q_{\mathrm{C1}}\end{matrix}\right] + "
+                      r"\left[\begin{matrix}\frac{1}{R}\\0\end{matrix}\right] \left[\begin{matrix}v{\left(t \right)}\end{matrix}\right]", out["matrix"])
+
+    def test_output_with_no_input_term_drops_d(self):
+        m = bg.parse_text(self.SERIES_RC + "output v_C = e_C1\n")
+        matrix = bg.latex_report(m, bg.causality(m))["matrix"]
+        self.assertTrue(matrix.endswith(r"\left[\begin{matrix}v_{C}\end{matrix}\right] = \left[\begin{matrix}\frac{1}{C}\end{matrix}\right] "
+                                        r"\left[\begin{matrix}q_{\mathrm{C1}}\end{matrix}\right]" + "\n\\end{gathered}"), matrix)
+
+    def test_unsolved_output_is_reported(self):
+        m = bg.parse_text("junction n 0: Q-, T+, O+\nelement Q Sf value=Q(t)\nelement T C C=A\nelement O R e=a*f*Abs(f)\n"
+                          "output Qo = f_O\noutput h = q_T/A\n")
+        out = bg.latex_report(m, bg.causality(m))
+        self.assertEqual(out["unsolved_outputs"], ["Qo"])
+        self.assertIsNone(out["matrix"])
+
 
 if __name__ == "__main__":
     unittest.main()

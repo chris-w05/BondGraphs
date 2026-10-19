@@ -517,6 +517,19 @@
         errors.push({ node: n.id, msg: `${n.name}: ${err.message}` });
       }
     }
+    // Outputs use the same names as the laws. One that can't be read keeps its
+    // error to itself and gives no values; the simulation still runs.
+    const outputs = (graph.outputs || []).map((o) => {
+      const out = { name: o.name, expr: o.expr, fn: null, error: "" };
+      try {
+        out.ast = parse(o.expr);
+        checkReserved(out.ast);
+        const nm = names(out.ast);
+        nm.ids.forEach((id) => { if (id !== "t" && !sym.has(id)) paramNames.add(id); });
+        nm.inputs.forEach((id) => inputNames.add(id));
+      } catch (err) { out.error = err.message; }
+      return out;
+    });
     // Inputs may themselves use parameters.
     const inputAst = new Map();
     for (const name of inputNames) {
@@ -569,6 +582,12 @@
       const n = graph.nodes.find((x) => x.id === id), own = ownVars(n);
       try { law.set(id, compile(ast, own ? (name) => own.get(name) || resolve(name) : resolve, callInput)); }
       catch (err) { errors.push({ node: id, msg: `${n.name}: ${err.message}` }); }
+    }
+    for (const o of outputs) {
+      if (!o.error) {
+        try { o.fn = compile(o.ast, resolve, callInput); } catch (err) { o.error = err.message; }
+      }
+      delete o.ast;
     }
 
     // Residuals, each r(c) with c = { v, P, t }.
@@ -629,7 +648,17 @@
       return n.kind === "C" ? ((j) => (c) => s * c.v[j])(F(b)) : ((j) => (c) => c.v[j])(E(b));
     });
 
-    return { N, nB, states, deriv, res, P, params, inputs: [...inputNames].sort(), symInfo, sym, errors };
+    return { N, nB, states, deriv, res, P, params, inputs: [...inputNames].sort(), symInfo, sym, outputs, errors };
+  }
+
+  // Each output's value at every saved step (NaN for one that can't be read).
+  function outputValues(model, T, X) {
+    const c = { v: null, P: model.P, t: 0, fz: null };
+    return model.outputs.map((o) => {
+      const ys = new Float64Array(X.length).fill(NaN);
+      if (o.fn) for (let i = 0; i < X.length; i++) { c.v = X[i]; c.t = T[i]; ys[i] = o.fn(c); }
+      return ys;
+    });
   }
 
   // Implicit simulation: BDF2 with a backward-Euler start, Newton on the full
@@ -765,7 +794,7 @@
         }
         jacFor = null;
         if (!ok) {
-          return { ok: true, partial: true, model, T: T.slice(0, n), X,
+          return { ok: true, partial: true, model, T: T.slice(0, n), X, Y: outputValues(model, T, X),
             errors: [{ msg: `The solver stopped at t = ${fmt(t - h)}: Newton's method didn't converge. A law may be discontinuous or undefined here, or the step is too large.` }],
             ms: Date.now() - t0 };
         }
@@ -777,11 +806,11 @@
       xCur = guess;
       X.push(Float64Array.from(xCur));
       if (!Number.isFinite(norm(xCur))) {
-        return { ok: true, partial: true, model, T: T.slice(0, n + 1), X, ms: Date.now() - t0,
+        return { ok: true, partial: true, model, T: T.slice(0, n + 1), X, Y: outputValues(model, T, X), ms: Date.now() - t0,
           errors: [{ msg: `The response became infinite near t = ${fmt(t)}.` }] };
       }
     }
-    return { ok: true, model, T, X, errors: [], ms: Date.now() - t0 };
+    return { ok: true, model, T, X, Y: outputValues(model, T, X), errors: [], ms: Date.now() - t0 };
   }
 
   function fmt(x) {
@@ -833,6 +862,8 @@
     }
     extraEls.forEach((l) => lines.push(l));
     connects.forEach((l) => lines.push(l));
+    const outputs = (graph.outputs || []).filter((o) => /^[A-Za-z_]\w*$/.test(o.name) && String(o.expr || "").trim());
+    if (outputs.length) lines.push("", ...outputs.map((o) => `output ${o.name} = ${String(o.expr).trim()}`));
     // Editor-only data the CLI ignores: positions, parameter values, inputs, settings.
     lines.push("", "# --- editor data (comments; bondgraph.py ignores these) ---");
     for (const n of graph.nodes) {
@@ -851,7 +882,7 @@
   }
 
   function fromBond(text) {
-    const nodes = [], bonds = [];
+    const nodes = [], bonds = [], outputs = [];
     const pos = {}, settings = { params: {}, inputs: {}, init: {}, tEnd: 10, steps: 1000 };
     const junctionLines = [], connects = [], unbonded = [];
     let nextId = 1;
@@ -899,8 +930,11 @@
         els.set(m[1], { id: nextId++, kind, name: m[1], x: 0, y: 0, law });
       } else if ((m = /^connect\s+(\w+)\s+(\w+)\s+(\w+)$/i.exec(line))) {
         connects.push([m[1], m[2], m[3], i + 1]);
+      } else if ((m = /^output\s+(\w+)\s*=\s*(.+)$/i.exec(line))) {
+        if (outputs.some((o) => o.name === m[1])) throw new SyntaxError(`line ${i + 1}: duplicate output ${m[1]}`);
+        outputs.push({ name: m[1], expr: m[2] });
       } else {
-        throw new SyntaxError(`line ${i + 1}: expected junction, element, or connect`);
+        throw new SyntaxError(`line ${i + 1}: expected junction, element, connect, or output`);
       }
     });
     // Unit transformers named bondN with connect are plain junction-junction bonds.
@@ -958,7 +992,7 @@
     const missing = nodes.filter((n) => !pos[n.name]);
     nodes.forEach((n) => { if (pos[n.name]) { n.x = pos[n.name][0]; n.y = pos[n.name][1]; } });
     if (missing.length) autoLayout({ nodes, bonds }, new Set(missing.map((n) => n.id)));
-    return { graph: { nodes, bonds }, settings };
+    return { graph: { nodes, bonds, outputs }, settings };
   }
 
   // Force-directed placement for nodes without stored positions.

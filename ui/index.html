@@ -253,6 +253,12 @@ table.data tr:nth-child(even) td { background: var(--bg); }
 .kv .k small { font-family: var(--font-ui); color: var(--muted); font-size: 11.5px; display: block; }
 .kv .dep { color: var(--muted); font-size: 12.5px; }
 .kv .err { grid-column: 1 / -1; margin-top: -4px; }
+.outs { display: grid; grid-template-columns: minmax(0, 7em) auto minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.outs .eqs { font: italic 15px var(--font-math); color: var(--ink-2); }
+.outs .err { grid-column: 1 / -1; margin-top: -2px; }
+.outs .rm { border: 0; background: transparent; color: var(--muted); cursor: pointer; width: 26px; height: 26px; border-radius: 6px; font-size: 16px; line-height: 1; }
+.outs .rm:hover { background: var(--bg); color: var(--ink); }
+.sec .add { justify-self: start; }
 
 /* ---- modal & toast */
 .modal { position: fixed; inset: 0; z-index: 20; background: rgba(10, 14, 12, .35); display: grid; place-items: center; padding: 16px; }
@@ -323,7 +329,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       <select class="btn" id="examples" aria-label="Load an example">
         <option value="">Load an example…</option>
       </select>
-      <button class="btn" id="btn-eq" type="button" aria-pressed="false" aria-controls="eqwin" title="Show the solved state equations">Equations</button>
+      <button class="btn" id="btn-eq" type="button" aria-pressed="false" aria-controls="eqwin" title="Show the solved state and output equations">Equations</button>
       <button class="btn" id="btn-import" type="button">Import .bond</button>
       <button class="btn" id="btn-export" type="button">Export .bond</button>
       <button class="btn danger" id="btn-clear" type="button">Clear</button>
@@ -386,6 +392,12 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       </div>
       <div class="charts" id="charts"></div>
       <div id="table-host" hidden></div>
+      <section class="sec" id="sec-outputs" hidden>
+        <h3>Outputs</h3>
+        <p class="lead">Plotted above and written in terms of the states in the equations window, as y = Cx + Du. Pick a variable, or write an expression such as <code>p_m/m</code> or <code>e_R1*f_R1</code>.</p>
+        <div class="outs" id="outputs"></div>
+        <select class="btn small add" id="add-output" aria-label="Add an output"><option value="">Add an output…</option></select>
+      </section>
       <section class="sec" id="sec-inputs" hidden>
         <h3>Inputs</h3>
         <p class="lead">Functions of time used in the laws, written like <code>Heaviside(t-1)</code> or <code>2*sin(3*t)</code>.</p>
@@ -405,9 +417,9 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   </main>
 </div>
 
-<section class="eqwin" id="eqwin" hidden aria-label="State equations">
+<section class="eqwin" id="eqwin" hidden aria-label="Equations">
   <div class="eq-head" id="eq-head">
-    <h2>State equations</h2>
+    <h2>Equations</h2>
     <button class="x" type="button" id="eq-close" aria-label="Close the equations">×</button>
     <div class="seg" role="group" aria-label="Layout">
       <button type="button" data-eqmode="separate" aria-pressed="true">Separate</button>
@@ -467,7 +479,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   const OWN_TITLES = { e: "this element's effort", f: "the flow into this element", q: "this element's displacement", p: "this element's momentum" };
 
   // ------------------------------------------------------------------ state
-  let graph = { nodes: [], bonds: [] };
+  let graph = { nodes: [], bonds: [], outputs: [] };
   let settings = { tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} };
   let plots = { hidden: [], extra: [] };
   let nextNode = 1, nextBond = 1;
@@ -487,7 +499,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   const snapshot = () => JSON.stringify({ graph, settings, plots, nextNode, nextBond });
   function restore(s) {
     const o = JSON.parse(s);
-    graph = o.graph; settings = Object.assign({ tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} }, o.settings);
+    graph = Object.assign({ outputs: [] }, o.graph); settings = Object.assign({ tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} }, o.settings);
     plots = o.plots || { hidden: [], extra: [] }; nextNode = o.nextNode || 1; nextBond = o.nextBond || 1;
     fixCounters();
   }
@@ -520,7 +532,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   }
 
   // ------------------------------------------------------------------ examples
-  function example(nodes, bonds, s, extra) {
+  function example(nodes, bonds, s, outputs) {
     const ns = nodes.map(([name, kind, x, y, law], i) => ({ id: i + 1, name, kind, x, y, law: law || {} }));
     const id = (nm) => ns.find((n) => n.name === nm.split(".")[0]).id;
     const port = (nm) => (nm.includes(".") ? Number(nm.split(".")[1]) : undefined);
@@ -531,13 +543,14 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       if (port(b)) o.toPort = port(b);
       return o;
     });
-    return { graph: { nodes: ns, bonds: bs }, settings: Object.assign({ params: {}, inputs: {}, init: {} }, s), plots: extra || { hidden: [], extra: [] } };
+    return { graph: { nodes: ns, bonds: bs, outputs: outputs || [] }, settings: Object.assign({ params: {}, inputs: {}, init: {} }, s), plots: { hidden: [], extra: [] } };
   }
   const EXAMPLES = {
     msd: ["Mass–spring–damper", () => example([
       ["F", "Se", 120, 240, { value: "F0*Heaviside(t-0.5)" }], ["v", "1", 300, 240], ["m", "I", 300, 100, { I: "m" }],
       ["k", "C", 480, 240, { C: "1/k" }], ["b", "R", 300, 380, { R: "b" }],
-    ], ["F>v", "v>m", "v>k", "v>b"], { tEnd: 15, steps: 1500, params: { m: "1", k: "4", b: "0.6", F0: "1" } })],
+    ], ["F>v", "v>m", "v>k", "v>b"], { tEnd: 15, steps: 1500, params: { m: "1", k: "4", b: "0.6", F0: "1" } },
+    [{ name: "v_m", expr: "f_m" }])],
     rc: ["RC circuit, current pulse", () => example([
       ["Is", "Sf", 120, 240, { value: "u(t)" }], ["n", "0", 300, 240], ["C1", "C", 300, 100, { C: "C" }], ["R1", "R", 480, 240, { R: "R" }],
     ], ["Is>n", "n>C1", "n>R1"], { tEnd: 8, steps: 1600, params: { R: "1", C: "0.5" }, inputs: { u: "Heaviside(t-1)-Heaviside(t-4)" } })],
@@ -545,7 +558,8 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       ["V", "Se", 90, 240, { value: "v(t)" }], ["arm", "1", 240, 240], ["Ra", "R", 240, 380, { R: "R_a" }], ["La", "I", 240, 100, { I: "L_a" }],
       ["G", "GY", 400, 240, { n: "K_t" }], ["shaft", "1", 560, 240], ["J", "I", 560, 100, { I: "J" }], ["b", "R", 560, 380, { R: "b" }],
     ], ["V>arm", "arm>Ra", "arm>La", "arm>G.1", "G.2>shaft", "shaft>J", "shaft>b"],
-    { tEnd: 3, steps: 1500, params: { R_a: "1", L_a: "0.05", K_t: "0.5", J: "0.1", b: "0.05" }, inputs: { v: "12" } })],
+    { tEnd: 3, steps: 1500, params: { R_a: "1", L_a: "0.05", K_t: "0.5", J: "0.1", b: "0.05" }, inputs: { v: "12" } },
+    [{ name: "i", expr: "f_La" }, { name: "omega", expr: "f_J" }])],
     tank: ["Tank with overflow (piecewise)", () => example([
       ["Qin", "Sf", 120, 240, { value: "Q_in" }], ["tank", "0", 300, 240], ["Tank", "C", 300, 100, { C: "A/(rho*g)" }],
       ["Outlet", "R", 480, 240, { R: "Piecewise((R_low,q_Tank>V_max),(R_high,True))" }],
@@ -647,6 +661,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const re = new RegExp(`\\b([qpef])_${old}(_2)?\\b`, "g");
     const sub = (s) => String(s).replace(re, (_, v, two) => `${v}_${newName}${two || ""}`);
     for (const m of graph.nodes) for (const k of Object.keys(m.law || {})) m.law[k] = sub(m.law[k]);
+    for (const o of graph.outputs) o.expr = sub(o.expr);
     // Carry default parameter names (C_C1 -> C_k) and their values along.
     const key = lawKey(n);
     if (key && key === BE.LAW_KEY[n.kind]) {
@@ -1169,6 +1184,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     }
   }
   function renderSetup() {
+    renderOutputs();
     const m = setupModel;
     if (!m) return;
     renderKV("inputs", "sec-inputs", m.inputs.map((n) => ({ name: n, label: n + "(t) =" })),
@@ -1191,34 +1207,125 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     });
   }
 
+  // ------------------------------------------------------------------ outputs
+  // Named expressions in the graph's variables (graph.outputs): plotted with the
+  // states, and written in terms of them in the equations window.
+  function outputError(o) {
+    try { BE.checkReserved(BE.parse(o.expr)); return ""; } catch (e) { return e.message; }
+  }
+  function outputNameProblem(name, except) {
+    if (!/^[A-Za-z_]\w*$/.test(name)) return "Use letters, digits and _ only, starting with a letter.";
+    if (BE.RESERVED[name] || name === "t") return `${name} is reserved; pick another name.`;
+    if (graph.outputs.some((o, j) => j !== except && o.name === name)) return `${name} is already an output.`;
+    const m = setupModel;
+    if (m && (m.sym.has(name) || m.params.includes(name) || m.inputs.includes(name))) return `${name} is already a name in the graph.`;
+    return "";
+  }
+  // Outputs don't change the causality: re-simulate for the plots and re-solve for the equations.
+  function outputsChanged(soon) {
+    clearTimeout(simTimer); simTimer = setTimeout(runSim, soon ? 60 : 200);
+    scheduleEq(soon ? 250 : 700);
+    save(); syncHistoryButtons();
+  }
+  function addOutput(expr) {
+    pushHistory();
+    let k = 1;
+    while (outputNameProblem("y" + k, -1)) k++;
+    graph.outputs.push({ name: "y" + k, expr });
+    renderOutputs(); outputsChanged(true);
+    if (!expr) $(`#outputs [data-out="${graph.outputs.length - 1}"]`).focus();
+  }
+  function removeOutput(i) {
+    pushHistory();
+    const [o] = graph.outputs.splice(i, 1);
+    plots.hidden = plots.hidden.filter((k) => k !== OUT + o.name);
+    renderOutputs(); outputsChanged(true);
+  }
+  function renameOutput(i, name) {
+    const o = graph.outputs[i];
+    name = name.trim();
+    if (name === o.name) return "";
+    const why = outputNameProblem(name, i);
+    if (why) return why;
+    pushHistory();
+    plots.hidden = plots.hidden.map((k) => (k === OUT + o.name ? OUT + name : k));
+    o.name = name;
+    renderOutputs(); outputsChanged(true);
+    return "";
+  }
+
+  let outSig = null;
+  function renderOutputs() {
+    const host = $("#outputs");
+    $("#sec-outputs").hidden = !graph.nodes.length && !graph.outputs.length;
+    const sig = graph.outputs.map((o) => o.name).join("|");
+    if (sig !== outSig) { // rebuilt only when outputs come, go or are renamed, so typing keeps focus
+      outSig = sig;
+      host.replaceChildren();
+      graph.outputs.forEach((o, i) => host.append(
+        h("input", { class: "text-in", value: o.name, spellcheck: false, autocomplete: "off", "aria-label": `Name of output ${o.name}`,
+          onchange: (e) => { const why = renameOutput(i, e.target.value); if (why) { toast(why); e.target.value = graph.outputs[i].name; } },
+          onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } }),
+        h("label", { class: "eqs", for: "output-" + i }, "="),
+        h("input", { class: "text-in", id: "output-" + i, "data-out": i, value: o.expr, placeholder: "p_m/m", spellcheck: false, autocomplete: "off",
+          "aria-label": `Expression for output ${o.name}`,
+          onfocus: () => pushHistory(),
+          oninput: (e) => { graph.outputs[i].expr = e.target.value; showOutputError(i); outputsChanged(); } }),
+        h("button", { class: "rm", type: "button", title: "Remove this output", "aria-label": `Remove output ${o.name}`, onclick: () => removeOutput(i) }, "×"),
+        h("div", { class: "err", "data-out-err": i, hidden: true })));
+    }
+    graph.outputs.forEach((o, i) => {
+      const inp = host.querySelector(`[data-out="${i}"]`);
+      if (document.activeElement !== inp) inp.value = o.expr;
+      showOutputError(i);
+    });
+    const sel = $("#add-output");
+    sel.replaceChildren(h("option", { value: "" }, "Add an output…"), h("option", { value: "=" }, "Write an expression…"));
+    if (setupModel) appendGroups(sel, variableGroups(setupModel).map(([label, names]) => [label, names.map((nm) => [nm, nm])]));
+  }
+  // An empty expression is still being written, so it isn't flagged.
+  function showOutputError(i) {
+    const o = graph.outputs[i], inp = $(`#outputs [data-out="${i}"]`), err = $(`#outputs [data-out-err="${i}"]`);
+    const msg = String(o.expr).trim() ? outputError(o) : "";
+    inp.classList.toggle("invalid", !!msg);
+    err.hidden = !msg; err.textContent = msg ? `Can't read ${o.name}: ${msg}` : "";
+  }
+
   // ------------------------------------------------------------------ charts
+  // A plot's key is its variable's name, or OUT + the output's name, which can't clash with one.
+  const OUT = "y:";
   function varInfo(name) {
     const m = pm();
     if (!m || !m.sym.has(name)) return null;
     const i = m.sym.get(name), info = m.symInfo[i];
     if (info.kind === "state") {
       const n = nodeById(info.node);
-      if (!n) return { name, index: i, desc: "removed from the graph", node: null };
+      if (!n) return { key: name, name, index: i, desc: "removed from the graph", node: null };
       const dep = caus.storage[info.node] === "derivative";
-      return { name, index: i, desc: `${n.kind === "C" ? "displacement" : "momentum"} of ${n.name}`, dep, node: n.id };
+      return { key: name, name, index: i, desc: `${n.kind === "C" ? "displacement" : "momentum"} of ${n.name}`, dep, node: n.id };
     }
     const b = bondById(info.bond);
     const A = b && nodeById(b.from), B = b && nodeById(b.to);
     const end = A && B ? (BE.JUNCTION[A.kind] ? B : A) : null;
-    return { name, index: i, desc: `${info.kind} on bond ${A ? A.name : "?"} → ${B ? B.name : "?"}`, node: end && !BE.JUNCTION[end.kind] ? end.id : null };
+    return { key: name, name, index: i, desc: `${info.kind} on bond ${A ? A.name : "?"} → ${B ? B.name : "?"}`, node: end && !BE.JUNCTION[end.kind] ? end.id : null };
   }
+  function outputInfo(name) {
+    const m = pm();
+    const k = m ? m.outputs.findIndex((o) => o.name === name && !o.error) : -1;
+    return k < 0 ? null : { key: OUT + name, name, out: k, desc: "= " + m.outputs[k].expr, node: null };
+  }
+  const plotInfo = (key) => (key.startsWith(OUT) ? outputInfo(key.slice(OUT.length)) : varInfo(key));
   function plotList() {
     const m = pm(); if (!m) return [];
-    const out = m.states.map((s) => s.name).filter((nm) => !plots.hidden.includes(nm));
-    for (const x of plots.extra) if (m.sym.has(x) && !out.includes(x)) out.push(x);
-    return out.map(varInfo).filter(Boolean);
+    const keys = m.states.map((s) => s.name).concat(m.outputs.map((o) => OUT + o.name)).filter((k) => !plots.hidden.includes(k));
+    for (const x of plots.extra) if (m.sym.has(x) && !keys.includes(x)) keys.push(x);
+    return keys.map(plotInfo).filter(Boolean);
   }
-  function seriesOf(index) {
+  function seriesOf(v) {
     if (!sim) return null;
-    if (series.has(index)) return series.get(index);
-    const ys = new Float64Array(sim.X.length);
-    for (let i = 0; i < sim.X.length; i++) ys[i] = sim.X[i][index];
-    series.set(index, ys);
+    if (series.has(v.key)) return series.get(v.key);
+    const ys = v.out != null ? sim.Y[v.out] : Float64Array.from(sim.X, (x) => x[v.index]);
+    series.set(v.key, ys);
     return ys;
   }
 
@@ -1227,7 +1334,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const host = $("#charts");
     const list = plotList();
     fillAddPlot(list);
-    const sig = list.map((v) => v.name + (v.dep ? "!" : "")).join("|");
+    const sig = list.map((v) => v.key + (v.dep ? "!" : "") + v.desc).join("|");
     if (sig !== chartSig) {
       chartSig = sig;
       host.replaceChildren();
@@ -1235,10 +1342,10 @@ table.data tr:nth-child(even) td { background: var(--bg); }
         ? "No states yet. Bond a C or I element into the graph and its state will plot here."
         : "Draw a graph on the left. Each storage element in it becomes a state plotted here."));
       for (const v of list) {
-        const cv = h("canvas", { tabindex: "0", "aria-label": `${v.name}, ${v.desc}, over time. Use the arrow keys to read values.`, "data-name": v.name });
-        const card = h("div", { class: "chart", "data-name": v.name },
+        const cv = h("canvas", { tabindex: "0", "aria-label": `${v.name}, ${v.desc}, over time. Use the arrow keys to read values.`, "data-name": v.key });
+        const card = h("div", { class: "chart", "data-name": v.key },
           h("div", { class: "chart-top" }, h("span", { class: "nm" }, v.name), h("span", { class: "desc" }, v.desc), v.dep ? h("span", { class: "tag" }, "dependent") : null,
-            h("span", { class: "val", "data-val": v.name }), h("button", { class: "rm", type: "button", title: "Remove this plot", "aria-label": `Remove plot of ${v.name}`, onclick: () => removePlot(v.name) }, "×")),
+            h("span", { class: "val", "data-val": v.key }), h("button", { class: "rm", type: "button", title: "Remove this plot", "aria-label": `Remove plot of ${v.name}`, onclick: () => removePlot(v.key) }, "×")),
           cv);
         card.addEventListener("pointerenter", () => { ui.linked = v.node; render(); });
         card.addEventListener("pointerleave", () => { ui.linked = null; render(); });
@@ -1271,30 +1378,41 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     ui.hoverIdx = Math.max(0, Math.min(sim.T.length - 1, i));
     drawAllCharts();
   }
-  function removePlot(name) {
-    if (pm() && pm().states.some((s) => s.name === name)) plots.hidden.push(name);
-    plots.extra = plots.extra.filter((x) => x !== name);
+  // States and outputs plot unless hidden; other variables only when added.
+  const plotsByDefault = (key) => key.startsWith(OUT) || (pm() && pm().states.some((s) => s.name === key));
+  function removePlot(key) {
+    if (plotsByDefault(key)) plots.hidden.push(key);
+    plots.extra = plots.extra.filter((x) => x !== key);
     save(); renderCharts();
   }
-  function fillAddPlot(list) {
-    const sel = $("#add-plot");
-    const m = pm();
-    sel.replaceChildren(h("option", { value: "" }, "Add a plot…"));
-    if (!m) return;
-    const shown = new Set(list.map((v) => v.name));
+  // The model's variables as [label, names] groups for a picker.
+  function variableGroups(m) {
     const groups = [["States", m.states.map((s) => s.name)], ["Efforts", []], ["Flows", []]];
     m.symInfo.forEach((info) => {
       if (!info) return;
       if (info.kind === "effort") groups[1][1].push(info.name);
       if (info.kind === "flow") groups[2][1].push(info.name);
     });
-    for (const [label, names] of groups) {
-      const free = names.filter((nm) => !shown.has(nm));
-      if (!free.length) continue;
+    return groups;
+  }
+  // Append an optgroup per group of [value, text] options that has any.
+  function appendGroups(sel, groups) {
+    for (const [label, options] of groups) {
+      if (!options.length) continue;
       const og = h("optgroup", { label });
-      free.forEach((nm) => og.append(h("option", { value: nm }, nm)));
+      options.forEach(([value, text]) => og.append(h("option", { value }, text)));
       sel.append(og);
     }
+  }
+  function fillAddPlot(list) {
+    const sel = $("#add-plot");
+    const m = pm();
+    sel.replaceChildren(h("option", { value: "" }, "Add a plot…"));
+    if (!m) return;
+    const shown = new Set(list.map((v) => v.key));
+    const groups = variableGroups(m).map(([label, names]) => [label, names.map((nm) => [nm, nm])]);
+    groups.splice(1, 0, ["Outputs", m.outputs.filter((o) => !o.error).map((o) => [OUT + o.name, o.name])]);
+    appendGroups(sel, groups.map(([label, options]) => [label, options.filter(([key]) => !shown.has(key))]));
   }
 
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -1323,9 +1441,9 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   }
 
   function drawChart(cv) {
-    const name = cv.dataset.name;
-    const v = varInfo(name);
-    const valEl = document.querySelector(`[data-val="${CSS.escape(name)}"]`);
+    const key = cv.dataset.name;
+    const v = plotInfo(key);
+    const valEl = document.querySelector(`[data-val="${CSS.escape(key)}"]`);
     const dpr = window.devicePixelRatio || 1;
     const W = cv.clientWidth, H = cv.clientHeight;
     if (!W || !H) return;
@@ -1333,7 +1451,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const g = cv.getContext("2d");
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    const ys = sim && v ? seriesOf(v.index) : null;
+    const ys = sim && v ? seriesOf(v) : null;
     if (!ys) { if (valEl) valEl.textContent = ""; return; }
     const T = sim.T, n = Math.min(ys.length, T.length);
     let lo = Infinity, hi = -Infinity;
@@ -1406,7 +1524,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     for (let r = 0; r < rows; r++) {
       const i = Math.round((r / (rows - 1)) * (n - 1));
       const tr = h("tr", null, h("td", null, BE.fmt(sim.T[i])));
-      list.forEach((v) => tr.append(h("td", null, BE.fmt(seriesOf(v.index)[i]))));
+      list.forEach((v) => tr.append(h("td", null, BE.fmt(seriesOf(v)[i]))));
       body.append(tr);
     }
     tbl.append(body);
@@ -1418,7 +1536,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const list = plotList();
     const n = sim.T.length, every = Math.max(1, Math.ceil(n / 2001));
     const lines = [["t", ...list.map((v) => v.name)].join(",")];
-    for (let i = 0; i < n; i += every) lines.push([sim.T[i], ...list.map((v) => seriesOf(v.index)[i])].map((x) => +x.toPrecision(10)).join(","));
+    for (let i = 0; i < n; i += every) lines.push([sim.T[i], ...list.map((v) => seriesOf(v)[i])].map((x) => +x.toPrecision(10)).join(","));
     copyText(lines.join("\n"), `Copied ${lines.length - 1} rows of CSV.`);
   }
   function copyText(text, ok) {
@@ -1465,7 +1583,9 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     // The solver uses the editor's causality, so the window always matches the strokes drawn.
     const integral = {};
     for (const n of graph.nodes) if (caus.storage[n.id]) integral[n.name] = caus.storage[n.id] === "integral";
-    const bond = BE.toBond(graph).split("\n").filter((l) => l && !l.startsWith("#")).join("\n"); // drop layout comments
+    // Only outputs that can be read go to SymPy, so one still being typed doesn't stop the rest.
+    const outputs = graph.outputs.filter((o) => !outputError(o));
+    const bond = BE.toBond(Object.assign({}, graph, { outputs })).split("\n").filter((l) => l && !l.startsWith("#")).join("\n"); // drop layout comments
     const key = bond + JSON.stringify(integral);
     if (key === eq.key && !eq.fatal) { renderEq(); return; } // only moved or restyled
     const req = ++eq.req; // a reply to an older request is ignored
@@ -1505,12 +1625,23 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const o = eq.out;
     if (!o || !window.katex) return; // still loading; the status line says so
     const math = (src) => { const d = h("div"); window.katex.render(src, d, { displayMode: true, throwOnError: false }); body.append(d); };
-    if (!o.states.length) note("No states: there's no C or I element in integral causality.");
-    else if (eq.mode === "matrix" && !o.solved) note("The matrix form needs every equation solved. Switch to Separate to see how far SymPy got.", "warn");
+    const outs = o.outputs || [], stuck = o.unsolved_outputs || [];
+    const who = stuck.join(", ");
+    if (!o.states.length) {
+      note("No states: there's no C or I element in integral causality.");
+      if (outs.length) math(o.separate);
+    } else if (eq.mode === "matrix" && !o.solved) note("The matrix form needs every equation solved. Switch to Separate to see how far SymPy got.", "warn");
     else if (eq.mode === "matrix") {
       math(o.matrix);
-      if (!o.linear) note("These equations aren't linear in the states and inputs, so they're shown as one vector, ẋ = f(x, u).");
+      const yRow = outs.length && !stuck.length, yCurved = yRow && !o.outputs_linear;
+      if (!o.linear && yCurved) note("These equations aren't linear in the states and inputs, so they're shown as vectors, ẋ = f(x, u) and y = h(x, u).");
+      else if (!o.linear) note(`${yRow ? "The state equations" : "These equations"} aren't linear in the states and inputs, so they're shown as one vector, ẋ = f(x, u).`);
+      else if (yCurved) note("The outputs aren't linear in the states and inputs, so they're shown as one vector, y = h(x, u).");
+      if (stuck.length) note(`SymPy couldn't write ${who} in terms of the states and inputs, so the outputs are left out. Switch to Separate to see how far it got.`, "warn");
     } else math(o.separate);
+    if (stuck.length && (!o.states.length || (eq.mode === "separate" && o.solved))) {
+      note(`SymPy couldn't write ${who} in terms of the states and inputs, so ${stuck.length > 1 ? "they still contain" : "it still contains"} bond variables (e, f).`, "warn");
+    }
     if (o.states.length && !o.solved) {
       if (eq.mode === "separate") note("SymPy couldn't eliminate every algebraic variable, so some equations still contain bond variables (e, f).", "warn");
       const details = h("details", null, h("summary", null, "Full equations (each equals zero)"));
@@ -1537,8 +1668,8 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   }
   function copyEq() {
     const o = eq.out;
-    if (!o || !o.states.length) { toast("Nothing to copy yet."); return; }
-    const matrix = eq.mode === "matrix" && o.solved;
+    if (!o || (!o.states.length && !(o.outputs || []).length)) { toast("Nothing to copy yet."); return; }
+    const matrix = eq.mode === "matrix" && !!o.matrix;
     copyText(matrix ? o.matrix : o.separate, matrix ? "Copied the matrix form as LaTeX." : "Copied the equations as LaTeX.");
   }
   // Keep the window on screen, at its saved spot if it was dragged.
@@ -1648,7 +1779,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     closePopover(); ui.sel = null;
     $("#t-end").value = settings.tEnd; $("#t-steps").value = settings.steps;
     for (const k in listKeys) delete listKeys[k];
-    chartSig = "";
+    chartSig = ""; outSig = null;
     sim = null; series = new Map();
     if (fit) fitView();
     changed();
@@ -1801,7 +1932,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     $("#btn-clear").addEventListener("click", () => {
       if (!graph.nodes.length) return;
       pushHistory();
-      graph = { nodes: [], bonds: [] }; plots = { hidden: [], extra: [] };
+      graph = { nodes: [], bonds: [], outputs: [] }; plots = { hidden: [], extra: [] };
       afterLoad(false); toast("Cleared the drawing. Undo brings it back.");
     });
     $("#modal").addEventListener("pointerdown", (e) => { if (e.target === $("#modal")) closeModal(); });
@@ -1823,10 +1954,14 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       inp.addEventListener("input", () => { clearTimeout(simTimer); simTimer = setTimeout(runSim, 250); save(); });
     }
     $("#add-plot").addEventListener("change", (e) => {
-      const nm = e.target.value; if (!nm) return;
-      if (pm() && pm().states.some((s) => s.name === nm)) plots.hidden = plots.hidden.filter((x) => x !== nm);
-      else plots.extra.push(nm);
+      const key = e.target.value; if (!key) return;
+      if (plotsByDefault(key)) plots.hidden = plots.hidden.filter((x) => x !== key);
+      else plots.extra.push(key);
       save(); renderCharts();
+    });
+    $("#add-output").addEventListener("change", (e) => {
+      const v = e.target.value; e.target.value = "";
+      if (v) addOutput(v === "=" ? "" : v);
     });
     $("#btn-table").addEventListener("click", (e) => {
       ui.table = !ui.table; e.currentTarget.setAttribute("aria-pressed", String(ui.table));

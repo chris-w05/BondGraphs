@@ -225,6 +225,30 @@ test(".bond export runs through the CLI format and imports back", () => {
   fs.writeFileSync(path.join(require("node:os").tmpdir(), "ui_export.bond"), text);
 });
 
+test("outputs follow the response, and a broken one doesn't stop it", () => {
+  // Series RC from a 2 V source, RC = 1: v_C = 2(1 - e^-t), i = (2 - v_C)/R
+  const g = G([["V", "Se", { value: "2" }], ["a", "1"], ["R1", "R", { R: "R" }], ["C1", "C", { C: "C" }]], ["V>a", "a>R1", "a>C1"]);
+  g.outputs = [{ name: "i", expr: "f_R1" }, { name: "v_C", expr: "q_C1/C" }, { name: "P", expr: "k*e_R1*f_R1" }, { name: "bad", expr: "f_R1+" }];
+  const { r } = run(g, { tEnd: 5, steps: 2000, params: { R: "0.5", C: "2", k: "3" } });
+  assert.deepEqual(r.model.params, ["C", "R", "k"], "a parameter only an output uses is listed");
+  assert.match(r.model.outputs[3].error, /ends too early/);
+  const end = (k) => r.Y[k][r.Y[k].length - 1];
+  near(end(1), 2 * (1 - Math.exp(-5)), 2e-4, "v_C(5)");
+  near(end(0), 4 * Math.exp(-5), 2e-4, "i(5)");
+  near(end(2), 3 * 0.5 * end(0) ** 2, 1e-9, "P = k R i^2");
+  assert.ok(r.Y[3].every(Number.isNaN));
+});
+
+test("outputs survive .bond export and import", () => {
+  const g = G([["Is", "Sf", { value: "1" }], ["n", "0"], ["C1", "C", { C: "C" }]], ["Is>n", "n>C1"]);
+  g.outputs = [{ name: "v", expr: " q_C1 / C " }, { name: "unfinished", expr: "" }];
+  const text = E.toBond(g);
+  assert.match(text, /^output v = q_C1 \/ C$/m);
+  assert.doesNotMatch(text, /unfinished/);
+  assert.deepEqual(E.fromBond(text).graph.outputs, [{ name: "v", expr: "q_C1 / C" }]);
+  assert.throws(() => E.fromBond("output y = 1\noutput y = 2\n"), /line 2: duplicate output y/);
+});
+
 test("the equations window's copy of bondgraph.py is up to date", () => {
   const embed = require("./embed-python.js");
   assert.ok(fs.existsSync(embed.OUT) && fs.readFileSync(embed.OUT, "utf8") === embed.render(),

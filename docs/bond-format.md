@@ -9,7 +9,7 @@ python3 bondgraph.py model.bond                  # causality, states, state equa
 python3 bondgraph.py model.bond --show-equations # also print every junction/element equation
 python3 bondgraph.py model.bond --json           # machine-readable output
 python3 bondgraph.py model.bond --latex          # state equations as LaTeX, one per state
-python3 bondgraph.py model.bond --latex=matrix   # ... or as x' = A x + B u
+python3 bondgraph.py model.bond --latex=matrix   # ... or as x' = A x + B u, y = C x + D u
 ```
 
 Contents:
@@ -22,16 +22,17 @@ Contents:
 6. [Modulated elements](#6-modulated-elements)
 7. [Piecewise and nonlinear laws](#7-piecewise-and-nonlinear-laws)
 8. [Causality](#8-causality)
-9. [Reading the output](#9-reading-the-output)
-10. [Errors and troubleshooting](#10-errors-and-troubleshooting)
-11. [Quick reference](#11-quick-reference)
+9. [Outputs](#9-outputs)
+10. [Reading the output](#10-reading-the-output)
+11. [Errors and troubleshooting](#11-errors-and-troubleshooting)
+12. [Quick reference](#12-quick-reference)
 
 ---
 
 ## 1. File layout
 
-- One statement per line. There are three statements: `junction`, `element`
-  and `connect`.
+- One statement per line. There are four statements: `junction`, `element`,
+  `connect` and `output`.
 - `#` starts a comment that runs to the end of the line. Blank lines are
   ignored.
 - Keywords and element kinds are case-insensitive (`GY`, `gy`). Names are
@@ -416,7 +417,46 @@ The search is exhaustive, so models are limited to **22 ports** in total
 (each one-port counts 1, each TF/GY counts 2). For larger systems, split the
 model.
 
-## 9. Reading the output
+## 9. Outputs
+
+```text
+output <name> = <expression>
+```
+
+An output names a quantity you want written in terms of the states and inputs:
+a velocity, a spring force, the power a resistor dissipates. The expression
+uses the same names as a law ([Modulated elements](#6-modulated-elements)):
+states, bond variables (`e_X`, `f_X`, `e_X_2`, `f_X_2`), parameters, inputs
+and `t`. Unlike `element` parameters, it may contain spaces. Names are letters,
+digits and `_`; each output needs its own.
+
+```text
+# Mass-spring-damper outputs
+output v_m = f_m          # velocity of the mass (p_m/m)
+output F_k = e_k          # spring force (k*q_k)
+output P_b = e_b * f_b    # power the damper dissipates
+```
+
+The tool substitutes the solved bond variables, so each output prints in terms
+of the states, inputs and parameters:
+
+```text
+Outputs:
+  v_m = p_m/m
+  F_k = k*q_k
+  P_b = b*p_m**2/m**2
+```
+
+Storage in derivative causality is still the original element. After a
+[reduction](#reducing-derivative-causality-away), its state is written in terms
+of the states, and its effort or flow comes from how fast that state changes:
+in `fluid_piston.bond`, `output F_m = e_m` gives the force on the mass as
+`m*A/If` times `d(p_If)/dt`.
+
+An output that still mentions a bond variable couldn't be solved for; the tool
+says so after the outputs.
+
+## 10. Reading the output
 
 ```text
 Causality (element port -> quantity caused onto junction):
@@ -445,11 +485,15 @@ State equations:
 - **Unable to eliminate algebraic variables:** SymPy couldn't reduce the
   system. The full equations (each `= 0`) follow so you can see what's left.
   `--show-equations` always prints them.
+- **Outputs:** only when the file has [`output` lines](#9-outputs); each one in
+  terms of the states, inputs and parameters.
 
 ### LaTeX and matrix form
 
-`--latex` prints the same state equations as a LaTeX `aligned` block.
-`--latex=matrix` prints them as `ẋ = A x + B u`:
+`--latex` prints the same state equations, then the outputs, as a LaTeX
+`aligned` block. `--latex=matrix` prints them as `ẋ = A x + B u` and, when
+there are outputs, `y = C x + D u` (the `D u` term is left out when `D` is
+zero):
 
 ```text
 \left[\begin{matrix}\dot{p}_{\mathrm{La}} \\ \dot{p}_{J}\end{matrix}\right] = \left[\begin{matrix}- \frac{R_{a}}{L_{a}} & - \frac{K_{t}}{J}\\\frac{K_{t}}{L_{a}} & - \frac{b}{J}\end{matrix}\right] \left[\begin{matrix}p_{\mathrm{La}} \\ p_{J}\end{matrix}\right] + \left[\begin{matrix}1\\0\end{matrix}\right] \left[\begin{matrix}v{\left(t \right)}\end{matrix}\right]
@@ -462,18 +506,21 @@ State equations:
   dynamics, not an input.
 - **Nonlinear models:** if the equations aren't linear in the states and inputs
   (a state-switched `Piecewise`, `q**3`, ...), there's no `A` and `B`, and the
-  matrix form is the vector `ẋ = f(x, u)`.
+  matrix form is the vector `ẋ = f(x, u)`. Likewise, nonlinear outputs (such
+  as a power `e_R1 * f_R1`) are shown as the vector `y = h(x, u)`.
 - **Names:** a one-letter subscript stays italic (`R_a` → R<sub>a</sub>) and a
   longer one is upright (`q_C1` → q<sub>C1</sub>, `R_on` → R<sub>on</sub>).
   Greek names (`rho`, `omega_n`) become Greek letters.
 
 The [editor](../ui/index.html)'s **Equations** window shows the same output.
 
-## 10. Errors and troubleshooting
+## 11. Errors and troubleshooting
 
 | Message | Cause / fix |
 |---------|-------------|
-| `line N: expected junction, element, or connect` | Typo in a keyword, or a missing `:` after the junction type. |
+| `line N: expected junction, element, connect, or output` | Typo in a keyword, a missing `:` after the junction type, or a missing `=` in an `output` line. |
+| `line N: duplicate output X` | Two `output` lines share a name. |
+| "Unable to write X in terms of the states and inputs" | Output `X` still mentions a bond variable SymPy couldn't eliminate; see [Section 7](#what-works-well-and-what-doesnt). |
 | `line N: expected key=value, got '...'` | A space inside an expression. Remove it. |
 | `line N: R takes R=, e=, f=, causality= not X=` | A key that this kind of element doesn't have; see the [Elements](#3-elements) tables. |
 | `line N: X has two laws (R= and f=); give one` | An element was given its law twice. Keep one form. |
@@ -489,7 +536,7 @@ The [editor](../ui/index.html)'s **Equations** window shows the same output.
 | SymPy error / traceback while parsing | A [reserved name](#reserved-names) was used as a parameter, or the expression is malformed. |
 | "Unable to eliminate algebraic variables" | See [Section 7](#what-works-well-and-what-doesnt). Also check for storage in derivative causality and algebraic loops. |
 
-## 11. Quick reference
+## 12. Quick reference
 
 ```text
 # comment
@@ -506,6 +553,8 @@ element <name> TF n=<expr>            # e1 = n e2,  f2 = n f1  (power in at 1, o
 element <name> GY n=<expr>            # e1 = n f2,  e2 = n f1
 
 connect <TF|GY name> <junction for port 1> <junction for port 2>   # power flows 1 -> 2
+
+output <name> = <expression>          # solved in terms of the states and inputs; spaces allowed
 ```
 
 Working examples are in [`examples/`](../examples):

@@ -41,6 +41,7 @@ class Model:
     junctions: dict[str, str] = field(default_factory=dict)
     attachments: dict[str, list[tuple[str, int, int]]] = field(default_factory=dict)
     elements: dict[str, Element] = field(default_factory=dict)
+    outputs: dict[str, str] = field(default_factory=dict)  # name -> expression
 
 
 def parse(path: str) -> Model:
@@ -58,6 +59,7 @@ def parse_text(text: str) -> Model:
         jm = re.fullmatch(r"junction\s+(\w+)\s+([01])\s*:\s*(.*)", line, re.I)
         em = re.fullmatch(r"element\s+(\w+)\s+(I|C|R|Se|Sf|TF|GY)(?:\s+(.*))?", line, re.I)
         cm = re.fullmatch(r"connect\s+(\w+)\s+(\w+)\s+(\w+)", line, re.I)
+        om = re.fullmatch(r"output\s+(\w+)\s*=\s*(.+)", line, re.I)
         if jm:
             name, kind, members = jm.groups()
             if name in m.junctions:
@@ -92,8 +94,13 @@ def parse_text(text: str) -> Model:
             m.elements[name] = Element(name, kind, params)
         elif cm:
             connects.append(cm.groups())
+        elif om:
+            name, expr = om.groups()
+            if name in m.outputs:
+                raise ValueError(f"line {number}: duplicate output {name}")
+            m.outputs[name] = expr
         else:
-            raise ValueError(f"line {number}: expected junction, element, or connect")
+            raise ValueError(f"line {number}: expected junction, element, connect, or output")
     # create one-port connections from junction member lists
     for jname, members in pending:
         for token, sign in members:
@@ -200,7 +207,7 @@ def sym(value: str, own: dict | None = None):
     return sp.sympify(value.replace("^", "**"), locals={"t": sp.Symbol("t"), **(own or {}), **functions})
 
 
-def derive(m: Model, c, inputs: dict | None = None, reduction: dict | None = None):
+def derive(m: Model, c, inputs: dict | None = None, reduction: dict | None = None, outputs: dict | None = None):
     """Return states, their derivatives, the full equations and the solution (None if unsolved).
 
     Source values that don't depend on the system are solved as input symbols.
@@ -211,10 +218,17 @@ def derive(m: Model, c, inputs: dict | None = None, reduction: dict | None = Non
     reduce_graph); the states and derivatives are still the original elements'.
     Pass a dict as `reduction` to get the steps taken ("steps") and each storage
     element that isn't a state as (its state, value in terms of the states) ("dependent").
+
+    Pass a dict as `outputs` to get m's outputs (name -> expression) in terms of
+    the states and inputs, as far as they solve (see unsolved).
     """
+    ys = {name: sym(expr) for name, expr in m.outputs.items()} if outputs is not None else {}
     red = reduce_graph(m, c)
     if red is None:
-        return derive_graph(m, c, inputs)
+        result = derive_graph(m, c, inputs, ys)
+        if outputs is not None:
+            outputs.update(ys)
+        return result
     states, dots, equations, sol = derive_graph(red.model, red.causality, inputs)
     stuck = set(derivative_storage(m, c))
     integral = {state_symbol(el) for el in m.elements.values() if el.kind.upper() in {"C", "I"} and el.name not in stuck}
@@ -230,11 +244,29 @@ def derive(m: Model, c, inputs: dict | None = None, reduction: dict | None = Non
     result = sorted(((pick, sp.simplify(k * d.xreplace(swap))) for (pick, k), d in zip(picks, dots)), key=lambda r: order[r[0]])
     if reduction is not None:
         reduction.update(steps=red.steps, dependent=sorted(dependent, key=lambda r: order[r[0]]))
+    if ys:
+        ys = {name: y.xreplace(dict(dependent)) for name, y in ys.items()}
+        if sol is not None:
+            # The reduced graph's bond variables aren't the original's, so solve the
+            # original graph again. Every storage element's rate is known now, and each
+            # one in derivative causality imposes its rate in place of its law.
+            rate = dict(result)
+            rate.update((y, sum(sp.diff(value, x) * dx for x, dx in result)) for y, value in dependent)
+            derive_graph(m, c, inputs, ys, {x: r for x, r in rate.items() if x.name[2:] in stuck})
+    if outputs is not None:
+        outputs.update(ys)
     return [x for x, _ in result], [d for _, d in result], equations, sol
 
 
-def derive_graph(m: Model, c, inputs: dict | None = None):
-    """derive() without the reduction."""
+def derive_graph(m: Model, c, inputs: dict | None = None, outputs: dict | None = None, rates: dict | None = None):
+    """derive() without the reduction.
+
+    A source already in `inputs` keeps its symbol. Each expression in `outputs`
+    (name -> expression) is replaced by its value in terms of the states. `rates`
+    maps the state of a storage element in derivative causality to its known rate,
+    which the element imposes in place of its law.
+    """
+    rates = rates or {}
     e, f, fin = {}, {}, {}
     equations, states, dots = [], [], []
     given: dict = {}
@@ -267,7 +299,8 @@ def derive_graph(m: Model, c, inputs: dict | None = None):
                 state = sp.Symbol(("q_" if k == "C" else "p_") + el.name)
                 own["q" if k == "C" else "p"] = state
             law = sym(el.params.get(form, f"{k}_{el.name}"), own)
-            if form != k: equations.append(own[form] - law)  # e=, f=, q= or p=: the law itself
+            if k != "R" and state in rates: equations.append((fin[key] if k == "C" else e[key]) - rates[state])
+            elif form != k: equations.append(own[form] - law)  # e=, f=, q= or p=: the law itself
             elif k == "R": equations.append(e[key] - law * fin[key])
             elif k == "C": equations.append(e[key] - state / law)
             else: equations.append(fin[key] - state / law)
@@ -276,8 +309,10 @@ def derive_graph(m: Model, c, inputs: dict | None = None):
         elif k in {"SE", "SF"}:
             value = sym(el.params.get("value", "u_" + el.name))
             if not value.free_symbols & system:  # an input, not a modulated source
-                given[sp.Dummy("u_" + el.name)] = (el.name, value)
-                value = list(given)[-1]
+                same = [u for u, (src, _) in (inputs or {}).items() if src == el.name]
+                u = same[0] if same else sp.Dummy("u_" + el.name)
+                given[u] = (el.name, value)
+                value = u
             equations.append((e[key] if k == "SE" else -fin[key]) - value)  # Sf: flow delivered
         # Two-ports: power enters port 1 and leaves port 2 (f2 out = -fin[2]).
         elif k == "TF":
@@ -319,6 +354,8 @@ def derive_graph(m: Model, c, inputs: dict | None = None):
     # inverses (p=Psi*tanh(f/i0) solved for f) gives several solutions; then
     # keep the first that's real wherever the others are.
     count, _, result, sol = max(candidates, key=lambda cand: (cand[0], real_samples(cand[1])))
+    if outputs:
+        outputs.update({name: sp.simplify(y.xreplace(sol).xreplace(back)) for name, y in outputs.items()})
     return states, [sp.simplify(r.xreplace(back)) for r in result], equations, sol if count == len(dots) else None
 
 
@@ -378,6 +415,13 @@ def state_symbol(el: Element) -> sp.Symbol:
 
 def derivative_storage(m: Model, c) -> list[str]:
     return [el.name for el in m.elements.values() if (el.kind.upper(), c.get((el.name, 1))) in {("C", "f"), ("I", "e")}]
+
+
+def unsolved(m: Model, states, outputs: dict) -> list[str]:
+    """Outputs that still mention a bond variable, or a storage element that isn't a state."""
+    left = {state_symbol(el) for el in m.elements.values() if el.kind.upper() in {"C", "I"}} - set(states)
+    left |= {sp.Symbol(f"{v}_{port_name(el.name, p)}") for el in m.elements.values() for p in range(1, len(el.ports) + 1) for v in "ef"}
+    return [name for name, y in outputs.items() if y.free_symbols & left]
 
 
 # ------------------------------------------------------------------ reduction
@@ -593,19 +637,25 @@ def tex_column(items) -> str:
 
 
 def latex_report(m: Model, c) -> dict:
-    """The state equations as LaTeX, one per state and in matrix form, for --latex and the editor."""
+    """The state and output equations as LaTeX, one per line and in matrix form, for --latex and the editor."""
     given: dict = {}
     reduction: dict = {}
-    states, dots, eqs, sol = derive(m, c, given, reduction)
+    ys: dict = {}
+    states, dots, eqs, sol = derive(m, c, given, reduction, ys)
     values = {u: value for u, (_, value) in given.items()}
     pairs = [(tex_name(str(x), dot=True), tex(d.xreplace(values))) for x, d in zip(states, dots)]
+    outs = [(tex_name(name), tex(y.xreplace(values))) for name, y in ys.items()]
+    stuck = unsolved(m, states, ys)
+    groups = [" \\\\\n".join(f"{l} &= {r}" for l, r in group) for group in (pairs, outs) if group]
     out = {
         "states": [tex_name(str(x)) for x in states],
         "equations": pairs,
-        "separate": "\\begin{aligned}\n" + " \\\\\n".join(f"{l} &= {r}" for l, r in pairs) + "\n\\end{aligned}",
+        "outputs": outs,
+        "unsolved_outputs": stuck,
+        "separate": "\\begin{aligned}\n" + " \\\\[1ex]\n".join(groups) + "\n\\end{aligned}",
         "solved": sol is not None,
         "full": [tex(eq) + " = 0" for eq in eqs],
-        "matrix": None, "linear": False, "inputs": [],
+        "matrix": None, "linear": False, "outputs_linear": False, "inputs": [],
         "reductions": [{"text": text, "math": r",\quad ".join(f"{tex_name(name)} = {tex(value)}" for name, value in laws)}
                        for text, laws in reduction.get("steps", [])],
         "dependent": [f"{tex_name(str(x))} = {tex(value)}" for x, value in reduction.get("dependent", [])],
@@ -618,22 +668,34 @@ def latex_report(m: Model, c) -> dict:
              for u, (src, value) in given.items()}
     columns = list(dict.fromkeys(shown.values()))  # two sources fed by one v(t) share a column
     slot = {name: sp.Dummy() for name in columns}
-    split = state_space(states, [d.xreplace({u: slot[shown[u]] for u in given}) for d in dots], list(slot.values()))
-    lhs = tex_column(tex_name(str(x), dot=True) for x in states)
-    if split is None:
-        out["matrix"] = f"{lhs} = {tex(sp.Matrix([d.xreplace(values) for d in dots]))}"
-        return out
-    A, B, d = split
-    rhs = [f"{tex(A)} {tex_column(tex_name(str(x)) for x in states)}"]
-    if columns:
-        rhs.append(f"{tex(B)} {tex_column(tex(name) for name in columns)}")
-    if any(d):
-        rhs.append(tex(d))
-    inputs = [f"{tex(shown[u])} = {tex(value)}" for u, (_, value) in given.items() if shown[u] != value]
-    matrix = f"{lhs} = " + " + ".join(rhs)
-    if inputs:
-        matrix = f"\\begin{{gathered}}\n{matrix} \\\\\n\\text{{where }} " + ",\\quad ".join(inputs) + "\n\\end{gathered}"
-    out.update(matrix=matrix, linear=True, inputs=inputs)
+    uses_u = False
+
+    def form(lhs, exprs):
+        """lhs = M x + N u (+ the rest), or lhs = the vector of exprs when they aren't linear in x and u."""
+        nonlocal uses_u
+        split = state_space(states, [y.xreplace({u: slot[shown[u]] for u in given}) for y in exprs], list(slot.values()))
+        if split is None:
+            return f"{lhs} = {tex(sp.Matrix([y.xreplace(values) for y in exprs]))}", False
+        M, N, rest = split
+        rhs = [f"{tex(M)} {tex_column(tex_name(str(x)) for x in states)}"]
+        if any(N):
+            rhs.append(f"{tex(N)} {tex_column(tex(name) for name in columns)}")
+            uses_u = True
+        if any(rest):
+            rhs.append(tex(rest))
+        return f"{lhs} = " + " + ".join(rhs), True
+
+    rows = []
+    row, out["linear"] = form(tex_column(tex_name(str(x), dot=True) for x in states), dots)
+    rows.append(row)
+    if ys and not stuck:
+        row, out["outputs_linear"] = form(tex_column(tex_name(name) for name in ys), list(ys.values()))
+        rows.append(row)
+    if uses_u:
+        out["inputs"] = [f"{tex(shown[u])} = {tex(value)}" for u, (_, value) in given.items() if shown[u] != value]
+    if out["inputs"]:
+        rows.append("\\text{where } " + ",\\quad ".join(out["inputs"]))
+    out["matrix"] = rows[0] if len(rows) == 1 else "\\begin{gathered}\n" + " \\\\\n".join(rows) + "\n\\end{gathered}"
     return out
 
 
@@ -656,14 +718,18 @@ def main():
                 print("% " + line)
             if not latex["solved"]:
                 sys.exit("Unable to eliminate algebraic variables; run without --latex for the full equations.")
+            if latex["unsolved_outputs"]:
+                print(f"% Unable to write {', '.join(latex['unsolved_outputs'])} in terms of the states and inputs.")
             return
         reduction: dict = {}
-        states, dots, eqs, sol = derive(m, c, reduction=reduction)
+        outputs: dict = {}
+        states, dots, eqs, sol = derive(m, c, reduction=reduction, outputs=outputs)
     except (OSError, ValueError, sp.SympifyError) as exc:
         sys.exit(f"Error: {exc}")
     report = {"causality": {f"{n}.{p}": v for (n,p),v in c.items()}, "states": [str(x) for x in states], "state_equations": [f"d({x})/dt = {y}" for x,y in zip(states,dots)],
               "reductions": [describe(step) for step in reduction.get("steps", [])],
-              "dependent_states": [f"{x} = {y}" for x, y in reduction.get("dependent", [])]}
+              "dependent_states": [f"{x} = {y}" for x, y in reduction.get("dependent", [])],
+              "outputs": [f"{name} = {y}" for name, y in outputs.items()]}
     if args.json:
         print(json.dumps(report, indent=2)); return
     print("Causality (element port -> quantity caused onto junction):")
@@ -679,6 +745,12 @@ def main():
         for line in report["dependent_states"]: print("  " + line)
     if sol is None:
         print("  Unable to eliminate algebraic variables; full equations follow.")
+    if report["outputs"]:
+        print("\nOutputs:")
+        for line in report["outputs"]: print("  " + line)
+        stuck = unsolved(m, states, outputs)
+        if stuck and sol is not None:
+            print(f"  Unable to write {', '.join(stuck)} in terms of the states and inputs.")
     if args.show_equations or sol is None:
         print("\nFull equations" + (" of the reduced graph" if report["reductions"] else "") + " (each equals zero):")
         for equation in eqs: print("  " + str(equation))

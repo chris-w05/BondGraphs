@@ -38,9 +38,13 @@ needed) to draw a bond graph instead of typing it:
   change.  It also lists parameters, inputs and initial conditions to edit.
   It uses an implicit BDF2 solver, so stiff models and derivative causality
   work too.
+- **Outputs:** the **Outputs** section under the plots defines the quantities
+  you care about: pick a state, effort or flow, or write any expression in
+  them, such as `p_m/m` or `e_R1*f_R1`.  Each output is plotted with the states,
+  and the equations window writes it in terms of the states and inputs.
 - **Equations:** the **Equations** button opens a window with the solved
-  state equations, typeset, either one per state or in matrix form
-  (`ẋ = A x + B u`; a nonlinear model is shown as one vector).  **Copy LaTeX**
+  state and output equations, typeset, either one per line or in matrix form
+  (`ẋ = A x + B u`, `y = C x + D u`; a nonlinear model is shown as a vector).  **Copy LaTeX**
   copies what it shows.  It runs this CLI's solver with SymPy inside the
   browser (via [Pyodide](https://pyodide.org)), so it shows exactly what
   `bondgraph.py --latex` prints, using the causality drawn in the editor.  The
@@ -59,7 +63,7 @@ tests fail until you do.
 ## `.bond` format
 
 The full reference covers syntax, every element kind, gyrators, modulated
-elements, piecewise laws, causality, output and errors:
+elements, piecewise laws, causality, outputs, the program's output and errors:
 [`docs/bond-format.md`](docs/bond-format.md).  A summary follows.
 
 Blank lines and text after `#` are ignored.  A junction lists attached
@@ -106,6 +110,15 @@ reference states (`q_C1`, `p_I1`) for modulated or piecewise laws, e.g.
 For a non-invertible resistance, add `causality=effort` (it imposes effort) or
 `causality=flow` (it imposes flow).  The latter is appropriate for the diode
 example described in the notes, written with `f=`.
+
+An `output` line names a quantity to solve for, written in states, bond
+variables, parameters, inputs and `t` (spaces allowed).  The CLI prints each
+output in terms of the states and inputs, after the state equations:
+
+```text
+output v_C = q_C1/C1
+output P_R = e_R1 * f_R1
+```
 
 ### Conventions and scope
 
