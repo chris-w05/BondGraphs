@@ -1,0 +1,33 @@
+# Two magnetically coupled coils as an I-field: flux linkages p = [[L1, M], [M, L2]] f
+# with mutual inductance M = kc*sqrt(L1*L2). A 50 Hz source drives the primary
+# through R1, and the secondary feeds a load R_L; with kc near 1 the load voltage
+# is about sqrt(L2/L1) = 2 times the source's.
+
+junction primary 1: Vs-, R1+, Coils.1+
+junction secondary 1: Coils.2+, RL+
+
+element Vs Se value=V0*sin(w*t)
+element R1 R R=R1
+element Coils Ifield p1=L1*f1+kc*sqrt(L1*L2)*f2 p2=kc*sqrt(L1*L2)*f1+L2*f2
+element RL R R=R_L
+
+output v_load = e_RL
+output i1 = f_R1
+output i2 = f_RL
+
+# --- editor data (comments; bondgraph.py ignores these) ---
+#@title Transformer: coupled coils (I-field)
+#@pos Vs 100 240
+#@pos primary 280 240
+#@pos R1 280 100
+#@pos Coils 470 240
+#@pos secondary 660 240
+#@pos RL 840 240
+#@param V0=10
+#@param w=2*pi*50
+#@param L1=0.01
+#@param L2=0.04
+#@param kc=0.95
+#@param R1=0.5
+#@param R_L=50
+#@sim tEnd=0.1 steps=4000

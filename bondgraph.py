@@ -27,6 +27,13 @@ except ImportError:  # helpful instead of a traceback for a fresh checkout
 LAW_FORMS = {"R": ("R", "e", "f"), "C": ("C", "e", "q"), "I": ("I", "f", "p"),
              "SE": ("value",), "SF": ("value",), "TF": ("n",), "GY": ("n",)}
 
+# Multiport fields have any number of ports and one law per port, keyed by the
+# variable it sets and the port: e1=phi(...), q2=phi(...). These are the letters
+# each kind takes. In a C, I or IC field the letter also sets the port's type: e or
+# q makes a C port (state q), f or p an I port (state p). In a field's laws, e1,
+# f1, q1, p1, ... are its own effort, inflow and state at each port.
+FIELDS = {"CFIELD": "eq", "IFIELD": "fp", "RFIELD": "ef", "ICFIELD": "eqfp"}
+
 
 @dataclass
 class Element:
@@ -57,7 +64,7 @@ def parse_text(text: str) -> Model:
         if not line:
             continue
         jm = re.fullmatch(r"junction\s+(\w+)\s+([01])\s*:\s*(.*)", line, re.I)
-        em = re.fullmatch(r"element\s+(\w+)\s+(I|C|R|Se|Sf|TF|GY)(?:\s+(.*))?", line, re.I)
+        em = re.fullmatch(r"element\s+(\w+)\s+(ICfield|Cfield|Ifield|Rfield|I|C|R|Se|Sf|TF|GY)(?:\s+(.*))?", line, re.I)
         cm = re.fullmatch(r"connect\s+(\w+)\s+(\w+)\s+(\w+)", line, re.I)
         om = re.fullmatch(r"output\s+(\w+)\s*=\s*(.+)", line, re.I)
         if jm:
@@ -67,7 +74,7 @@ def parse_text(text: str) -> Model:
             m.junctions[name] = kind
             parsed = []
             for token in filter(None, map(str.strip, members.split(","))):
-                mm = re.fullmatch(r"(\w+)(?:\.(1|2))?\s*([+-])?", token)
+                mm = re.fullmatch(r"(\w+)(?:\.(\d+))?\s*([+-])?", token)
                 if not mm:
                     raise ValueError(f"line {number}: bad attachment {token!r}")
                 ename, port, sign = mm.groups()
@@ -83,6 +90,14 @@ def parse_text(text: str) -> Model:
                     raise ValueError(f"line {number}: expected key=value, got {word!r}")
                 key, value = word.split("=", 1)
                 params[key] = value
+            if kind.upper() in FIELDS:
+                letters = FIELDS[kind.upper()]
+                for key in params:
+                    if not re.fullmatch(rf"[{letters}][1-9]\d*", key):
+                        laws = ", ".join(f"{letter}1=" for letter in letters)
+                        raise ValueError(f"line {number}: {kind} takes a law per port, like {laws} (the variable it sets and the port), not {key}=")
+                m.elements[name] = Element(name, kind, params)
+                continue
             forms = LAW_FORMS[kind.upper()]
             allowed = forms + (("causality",) if kind.upper() == "R" else ())
             unknown = [key for key in params if key not in allowed]
@@ -111,8 +126,11 @@ def parse_text(text: str) -> Model:
             elem = m.elements[ename]
             port = int(bits[1]) if len(bits) == 2 else 1
             if elem.kind.upper() in {"TF", "GY"}:
-                if len(bits) != 2:
+                if len(bits) != 2 or port not in {1, 2}:
                     raise ValueError(f"junction {jname}: two-port {ename} needs .1 or .2")
+            elif elem.kind.upper() in FIELDS:
+                if len(bits) != 2 or port < 1:
+                    raise ValueError(f"junction {jname}: field {ename} needs a port number, like {ename}.1")
             elif len(bits) != 1:
                 raise ValueError(f"junction {jname}: one-port {ename} cannot have a port suffix")
             while len(elem.ports) < port:
@@ -130,6 +148,12 @@ def parse_text(text: str) -> Model:
             raise ValueError(f"connect {ename}: unknown junction")
         elem.ports = [(j1, 1), (j2, -1)]  # power flows j1 -> element -> j2
     for elem in m.elements.values():
+        if elem.kind.upper() in FIELDS:
+            gap = next((p for p, (j, _) in enumerate(elem.ports, 1) if not j), None)
+            if not elem.ports or gap:
+                raise ValueError(f"element {elem.name}: " + (f"port {gap} isn't attached; number a field's ports 1, 2, 3, ..." if gap else "needs at least one attached port"))
+            field_ports(elem)  # each port has one law
+            continue
         required = 2 if elem.kind.upper() in {"TF", "GY"} else 1
         if len(elem.ports) != required or any(not p[0] for p in elem.ports):
             raise ValueError(f"element {elem.name}: needs {required} attached port(s)")
@@ -149,6 +173,56 @@ def port_name(name: str, port: int) -> str:
     return f"{name}_{port}" if port != 1 else name
 
 
+def field_ports(el: Element) -> list[tuple[int, str, str, str]]:
+    """A field's (port, letter, law, type) for each port in order; type is C, I or R.
+
+    Checks that each port has one law and that the laws use only the field's own
+    variables among names like e1, f2, q1 and p2.
+    """
+    n = len(el.ports)
+    laws: dict[int, tuple[str, str]] = {}
+    for key, value in el.params.items():
+        port = int(key[1:])
+        if port > n:
+            raise ValueError(f"element {el.name}: has a law for port {port} ({key}=) but {n} port{'s' if n != 1 else ''}")
+        if port in laws:
+            raise ValueError(f"element {el.name}: port {port} has two laws ({laws[port][0]}{port}= and {key}=); give one")
+        laws[port] = (key[0], value)
+    letters, out = FIELDS[el.kind.upper()], []
+    for p in range(1, n + 1):
+        if p not in laws:
+            raise ValueError(f"element {el.name}: port {p} needs a law ({' or '.join(f'{letter}{p}=' for letter in letters)})")
+        letter, law = laws[p]
+        out.append((p, letter, law, "R" if el.kind.upper() == "RFIELD" else "C" if letter in "eq" else "I"))
+    own = {f"{v}{p}" for p in range(1, n + 1) for v in "ef"} | {f"{'q' if t == 'C' else 'p'}{p}" for p, _, _, t in out if t != "R"}
+    for p, _, law, _ in out:
+        stray = sorted(set(re.findall(r"\b[efqp]\d+\b", law)) - own)
+        if stray:
+            raise ValueError(f"element {el.name}: the law for port {p} uses {stray[0]}, which isn't one of its variables")
+    return out
+
+
+def storage_ports(m: Model) -> list[tuple[Element, int, str]]:
+    """(element, port, C or I) for every storage port: C and I elements, and the C and I ports of fields."""
+    out = []
+    for el in m.elements.values():
+        k = el.kind.upper()
+        if k in {"C", "I"}:
+            out.append((el, 1, k))
+        elif k in FIELDS:
+            out += [(el, p, t) for p, _, _, t in field_ports(el) if t != "R"]
+    return out
+
+
+def port_state(el: Element, port: int, kind: str) -> sp.Symbol:
+    """State of a C (q) or I (p) storage port: q_X, or q_X_2 for a field's port 2."""
+    return sp.Symbol(("q_" if kind == "C" else "p_") + port_name(el.name, port))
+
+
+def integral_port(c, el: Element, port: int, kind: str) -> bool:
+    return c.get((el.name, port)) == ("e" if kind == "C" else "f")
+
+
 def causality(m: Model):
     """Return effort/flow produced onto each junction, maximizing integral storage."""
     ports = [(e.name, p) for e in m.elements.values() for p in range(1, len(e.ports) + 1)]
@@ -160,8 +234,6 @@ def causality(m: Model):
         key = (e.name, 1)
         if k == "SE": fixed[key] = "e"
         elif k == "SF": fixed[key] = "f"
-        elif k == "I": preferred[key] = "f"
-        elif k == "C": preferred[key] = "e"
         elif k == "R" and e.params.get("causality"):
             mode = e.params["causality"].lower()
             if mode not in {"effort", "flow"}:
@@ -169,6 +241,8 @@ def causality(m: Model):
             fixed[key] = "e" if mode == "effort" else "f"
         elif k in {"TF", "GY"}:
             pair_rules.append(((e.name, 1), (e.name, 2), k == "GY"))  # GY same, TF opposite
+    for el, p, kind in storage_ports(m):
+        preferred[el.name, p] = "e" if kind == "C" else "f"
     choices = [[fixed[p]] if p in fixed else ["e", "f"] for p in ports]
     best, best_score = None, -1
     # Kept deliberately bounded: an oversized model needs a proper constraint solver.
@@ -278,18 +352,25 @@ def derive_states(m: Model, c, inputs: dict | None = None, reduction: dict | Non
     ys = dict(outputs or {})
     red = reduce_graph(m, c)
     if red is None:
-        result = derive_graph(m, c, inputs, ys)
+        # Storage left in derivative causality is solved for alongside the outputs.
+        follow = [port_state(el, p, kind) for el, p, kind in storage_ports(m) if not integral_port(c, el, p, kind)]
+        work = {**ys, **{("follows", x): x for x in follow}}
+        result = derive_graph(m, c, inputs, work)
+        if reduction is not None:
+            dependent = [(x, work["follows", x]) for x in follow]
+            reduction.update(steps=[], dependent=[(x, y) for x, y in dependent if not unsolved(m, result[0], {x: y})])
         if outputs is not None:
-            outputs.update(ys)
+            outputs.update({name: work[name] for name in ys})
         return result
     states, dots, equations, sol = derive_graph(red.model, red.causality, inputs)
     stuck = set(derivative_storage(m, c))
-    integral = {state_symbol(el) for el in m.elements.values() if el.kind.upper() in {"C", "I"} and el.name not in stuck}
-    order = {state_symbol(el): i for i, el in enumerate(m.elements.values()) if el.kind.upper() in {"C", "I"}}
+    integral = {port_state(el, p, kind) for el, p, kind in storage_ports(m) if integral_port(c, el, p, kind)}
+    order = {port_state(el, p, kind): i for i, (el, p, kind) in enumerate(storage_ports(m))}
     # Each reduced state is a multiple of one original state: keep an integral one.
+    # A field's states aren't reduced, so they're their own.
     picks, dependent = [], []
     for x in states:
-        origin = red.origin[x.name[2:]]
+        origin = red.origin.get(x.name[2:], {x: sp.Integer(1)})
         pick = next((y for y in origin if y in integral), next(iter(origin)))
         picks.append((pick, origin[pick]))
         dependent += [(y, sp.simplify(k / origin[pick] * pick)) for y, k in origin.items() if y != pick]
@@ -340,9 +421,7 @@ def derive_graph(m: Model, c, inputs: dict | None = None, outputs: dict | None =
         summed = sum(sign * (f[n, p] if kind == "0" else e[n, p]) for n, p, sign in a)
         equations.append(summed)
     # Element laws and storage state equations
-    system = set(e.values()) | set(f.values()) | {
-        sp.Symbol(("q_" if el.kind.upper() == "C" else "p_") + el.name)
-        for el in m.elements.values() if el.kind.upper() in {"C", "I"}}
+    system = set(e.values()) | set(f.values()) | {port_state(el, p, kind) for el, p, kind in storage_ports(m)}
     for el in m.elements.values():
         k = el.kind.upper(); key = (el.name, 1)
         if k in {"R", "C", "I"}:
@@ -359,6 +438,14 @@ def derive_graph(m: Model, c, inputs: dict | None = None, outputs: dict | None =
             else: equations.append(fin[key] - state / law)
             if k != "R" and (k, c[key]) in {("C", "e"), ("I", "f")}:
                 states.append(state); dots.append(fin[key] if k == "C" else e[key])
+        elif k in FIELDS:
+            ports = field_ports(el)
+            own = {f"{v}{p}": x for p in range(1, len(el.ports) + 1) for v, x in (("e", e[el.name, p]), ("f", fin[el.name, p]))}
+            own.update({f"{'q' if t == 'C' else 'p'}{p}": port_state(el, p, t) for p, _, _, t in ports if t != "R"})
+            for p, letter, law, t in ports:
+                equations.append(own[f"{letter}{p}"] - sym(law, own))
+                if t != "R" and integral_port(c, el, p, t):
+                    states.append(port_state(el, p, t)); dots.append(fin[el.name, p] if t == "C" else e[el.name, p])
         elif k in {"SE", "SF"}:
             value = sym(el.params.get("value", "u_" + el.name))
             if not value.free_symbols & system:  # an input, not a modulated source
@@ -372,7 +459,10 @@ def derive_graph(m: Model, c, inputs: dict | None = None, outputs: dict | None =
             n = sym(el.params.get("n", "n_" + el.name)); equations += [e[el.name,1] - n*e[el.name,2], -fin[el.name,2] - n*fin[el.name,1]]
         elif k == "GY":
             n = sym(el.params.get("n", "n_" + el.name)); equations += [e[el.name,1] + n*fin[el.name,2], e[el.name,2] - n*fin[el.name,1]]
-    variables = list(e.values()) + list(f.values())
+    # Storage in derivative causality isn't a state: its law fixes its q or p, so
+    # that's solved for too (a flow source driving a mass fixes the mass's momentum).
+    stuck = [port_state(el, p, kind) for el, p, kind in storage_ports(m) if not integral_port(c, el, p, kind)]
+    variables = list(e.values()) + list(f.values()) + [x for x in stuck if x not in rates]
     # Piecewise element laws (check valves, piecewise resistors) are still linear in
     # the unknowns, but sp.solve evaluates their conditions during elimination and
     # can collapse to 0/0 -> nan, and it can't solve through Abs or sign at all.
@@ -453,12 +543,14 @@ def real_samples(exprs, count: int = 8) -> int:
 
 
 def storage_causality(m: Model, integral: dict[str, bool]):
-    """Causality for derive() from which storage elements are in integral causality."""
+    """Causality for derive() from which storage is in integral causality.
+
+    `integral` is keyed by element name, or "name.port" for a field's port.
+    """
     c = {}
-    for el in m.elements.values():
-        if el.kind.upper() in {"C", "I"}:
-            wanted, other = ("e", "f") if el.kind.upper() == "C" else ("f", "e")
-            c[el.name, 1] = wanted if integral.get(el.name, True) else other
+    for el, p, kind in storage_ports(m):
+        wanted, other = ("e", "f") if kind == "C" else ("f", "e")
+        c[el.name, p] = wanted if integral.get(el.name if el.kind.upper() in {"C", "I"} else f"{el.name}.{p}", True) else other
     return c
 
 
@@ -472,7 +564,7 @@ def derivative_storage(m: Model, c) -> list[str]:
 
 def unsolved(m: Model, states, outputs: dict) -> list[str]:
     """Outputs that still mention a bond variable, or a storage element that isn't a state."""
-    left = {state_symbol(el) for el in m.elements.values() if el.kind.upper() in {"C", "I"}} - set(states)
+    left = {port_state(el, p, kind) for el, p, kind in storage_ports(m)} - set(states)
     left |= {sp.Symbol(f"{v}_{port_name(el.name, p)}") for el in m.elements.values() for p in range(1, len(el.ports) + 1) for v in "ef"}
     return [name for name, y in outputs.items() if y.free_symbols & left]
 
@@ -528,7 +620,7 @@ def plain(el: Element) -> bool:
 def read_by_laws(m: Model) -> set[str]:
     """Elements whose e, f, q or p some law or modulus reads."""
     words = {w for el in m.elements.values() for v in el.params.values() for w in re.findall(r"\b[efqp]_(\w+)", v)}
-    return {w if w in m.elements else re.sub(r"_[12]$", "", w) for w in words}
+    return {w if w in m.elements else re.sub(r"_\d+$", "", w) for w in words}
 
 
 def join_names(els) -> str:
@@ -662,12 +754,19 @@ GREEK = set("alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta i
             "Upsilon Phi Psi Omega".split())
 
 
-def tex_name(name: str, dot: bool = False) -> str:
+def tex_name(name: str, dot: bool = False, bar: bool = False) -> str:
     """LaTeX for a name: q_C1 -> q_{\\mathrm{C1}}, R_a -> R_{a}, F0 -> F_{0}, rho -> \\rho.
 
     SymPy's own printer mangles some names (p_I_Electrical ends in "cal", which it
-    reads as \\mathcal), so every symbol goes through this instead.
+    reads as \\mathcal), so every symbol goes through this instead. A deviation
+    δq_C1 is \\delta q_{\\mathrm{C1}} and an operating point q_C1‾ is \\bar{q}_{\\mathrm{C1}}.
     """
+    if name.startswith(DELTA):
+        return r"\delta " + tex_name(name[1:], dot)
+    if name.endswith(BAR):
+        return tex_name(name[:-1], dot, bar=True)
+    if name.endswith(DOT):
+        return tex_name(name[:-1], True, bar)
     base, _, sub = name.partition("_")
     digits = re.fullmatch(r"([A-Za-z]+?)(\d+)", base)
     if not sub and digits:
@@ -675,6 +774,8 @@ def tex_name(name: str, dot: bool = False) -> str:
     head = "\\" + base if base in GREEK else rf"\mathit{{{base}}}" if base.isalpha() and len(base) > 1 else base
     if dot:
         head = rf"\dot{{{head}}}"
+    if bar:
+        head = rf"\bar{{{head}}}"
     if not sub:
         return head
     sub = sub if len(sub) == 1 or sub.isdigit() else r"\mathrm{%s}" % sub.replace("_", r"\_")
@@ -689,66 +790,308 @@ def tex_column(items) -> str:
     return r"\left[\begin{matrix}" + r" \\ ".join(items) + r"\end{matrix}\right]"
 
 
-def latex_report(m: Model, c) -> dict:
-    """The state and output equations as LaTeX, one per line and in matrix form, for --latex and the editor."""
+# ------------------------------------------------------------------ views
+# The state and output equations can be shown in energy variables (the states p
+# and q, as derived), in power variables (each storage port's effort or flow in
+# their place) or in Lagrange variables (displacements q and flows f: each I
+# port's flow in place of its p); and a nonlinear model can be replaced by its
+# linear approximation about an operating point first.
+
+DELTA, BAR, DOT = "δ", "‾", "˙"  # δx: a deviation from an operating point; x‾: the point's value; u˙: a rate
+TIME = sp.Symbol("t")
+INPUT_RATES = ("Some of these variables depend on an input, because a source drives storage in derivative causality, "
+               "so their equations include that input's rate of change.")
+VARIABLES = ("energy", "power", "lagrange")
+
+
+def derive_system(m: Model, c, power: bool = False) -> dict:
+    """One solve for any view: derive()'s states, derivatives, outputs and inputs.
+
+    With `power`, each storage port's power variable (the effort of a C port, the
+    flow of an I port) is solved for too, in terms of the states: "power" maps each
+    storage state to (its power variable, that value).
+    """
+    hidden = {}
+    if power:
+        hidden = {f"\0{port_state(el, p, kind)}": f"{'e' if kind == 'C' else 'f'}_{port_name(el.name, p)}"
+                  for el, p, kind in storage_ports(m)}
     given: dict = {}
     reduction: dict = {}
     ys: dict = {}
-    states, dots, eqs, sol = derive(m, c, given, reduction, ys)
-    values = {u: value for u, (_, value) in given.items()}
-    pairs = [(tex_name(str(x), dot=True), tex(d.xreplace(values))) for x, d in zip(states, dots)]
-    outs = [(tex_name(name), tex(y.xreplace(values))) for name, y in ys.items()]
-    stuck = unsolved(m, states, ys)
-    groups = [" \\\\\n".join(f"{l} &= {r}" for l, r in group) for group in (pairs, outs) if group]
+    states, dots, eqs, sol = derive(Model(m.junctions, m.attachments, m.elements, {**m.outputs, **hidden}), c, given, reduction, ys)
+    powers = {sp.Symbol(k[1:]): (sp.Symbol(v), ys.pop(k)) for k, v in hidden.items()}
+    return {"states": states, "dots": dots, "equations": eqs, "solved": sol is not None, "inputs": given,
+            "reduction": reduction, "outputs": ys, "power": powers if power else None}
+
+
+def input_columns(given: dict) -> list[dict]:
+    """The inputs as the entries of u, in order.
+
+    Each source is an entry: its value when that's a lone name or input like v(t),
+    else u_<source>, defined by a "where" line. Sources fed by one v(t) share one.
+    An entry has slot (the symbol for it in the equations), shown (how u shows it),
+    value (what it stands for), name (shown, as a string) and sources (their input
+    symbols in derive's results).
+    """
+    cols: list[dict] = []
+    for u, (src, value) in given.items():
+        shown = value if isinstance(value, (sp.Symbol, AppliedUndef)) else sp.Symbol("u_" + src)
+        col = next((col for col in cols if col["shown"] == shown), None)
+        if col is None:
+            name = shown.func.__name__ if isinstance(shown, AppliedUndef) else shown.name
+            col = {"slot": sp.Dummy(name), "shown": shown, "value": value, "name": name, "sources": []}
+            cols.append(col)
+        col["sources"].append(u)
+    return cols
+
+
+def jacobian(exprs, wrt, at: dict) -> sp.Matrix:
+    rows = sp.Matrix(len(exprs), 1, list(exprs))
+    if not wrt:
+        return sp.zeros(len(exprs), 0)
+    return rows.jacobian(list(wrt)).xreplace(at).applyfunc(sp.simplify)
+
+
+def view(m: Model, c, variables: str = "energy", linearize: bool = False, system: dict | None = None) -> dict:
+    """The state and output equations to show, in the variables asked for.
+
+    variables: energy (the states p and q, as derived), power (each storage port's
+    effort or flow in place of its state) or lagrange (each I port's flow in place
+    of its p; displacements q stay). linearize: replace a nonlinear model by its linear approximation
+    about an operating point (x‾, u‾), in deviations δx, δu and δy from it, with
+    "operating" the state derivatives there (each 0 at an equilibrium).
+
+    Inputs appear as the slots of "columns" (see input_columns). "note" says why
+    the view asked for can't be shown, and is "" when it can.
+    """
+    sysd = system or derive_system(m, c, power=variables != "energy")
+    cols = input_columns(sysd["inputs"])
+    to_slot = {u: col["slot"] for col in cols for u in col["sources"]}
+    slots = [col["slot"] for col in cols]
+    X = list(sysd["states"])
+    F = [d.xreplace(to_slot) for d in sysd["dots"]]
+    stuck = unsolved(m, X, sysd["outputs"])
+    Y = [(name, y.xreplace(to_slot)) for name, y in sysd["outputs"].items()]
+    dep = [(x, y.xreplace(to_slot)) for x, y in sysd["reduction"].get("dependent", [])]
+    out = {"states": X, "dots": F, "outputs": Y, "dependent": dep, "columns": cols, "unsolved_outputs": stuck,
+           "solved": sysd["solved"], "equations": sysd["equations"], "steps": sysd["reduction"].get("steps", []),
+           "variables": variables, "linearized": False, "operating": [], "note": "", "hint": ""}
+    ready = bool(sysd["solved"] and X)
+    linear_ys = lambda: not Y or bool(stuck) or state_space(X, [y for _, y in Y], slots) is not None  # noqa: E731
+    out["nonlinear"] = ready and not (state_space(X, F, slots) is not None and linear_ys())
+    if variables == "energy" and not (linearize and out["nonlinear"]):
+        return out
+    if not ready:
+        out["note"] = ("There are no states." if sysd["solved"] else
+                       "This needs every equation solved, and SymPy couldn't eliminate every algebraic variable. "
+                       "Energy variables show how far it got.")
+        return out
+    # The variables that take the states' places: every storage port's for power
+    # variables, the I ports' flows for Lagrange variables (a C port keeps its q).
+    powers = {x: (w, value.xreplace(to_slot)) for x, (w, value) in (sysd["power"] or {}).items()
+              if variables == "power" or w.name.startswith("f_")}
+
+    if linearize and out["nonlinear"]:
+        # Jacobians at the operating point, as deviations from it.
+        point = {**{x: sp.Symbol(x.name + BAR) for x in X}, **{col["slot"]: sp.Symbol(col["name"] + BAR) for col in cols}}
+        Ys = [] if stuck else Y
+        A, B = jacobian(F, X, point), jacobian(F, slots, point)
+        C, D = jacobian([y for _, y in Ys], X, point), jacobian([y for _, y in Ys], slots, point)
+        Jd, Ed = jacobian([y for _, y in dep], X, point), jacobian([y for _, y in dep], slots, point)
+        names = [x.name for x in X]
+        dep_names = [x.name for x, _ in dep]
+        rates = None  # with power variables, the coefficients of the inputs' rates
+        if powers:
+            # δw = T δx + S δu with T and S the power variables' Jacobians at the
+            # operating point, so dδw/dt = T dδx/dt + dT/dt δx + S dδu/dt + dS/dt δu.
+            Wall = [powers[x][1] if x in powers else x for x in X]
+            T, S = jacobian(Wall, X, point), jacobian(Wall, slots, point)
+            if T.det() == 0:
+                out["note"] = "The power variables don't determine the states at this operating point."
+                return out
+            Ti = T.inv().applyfunc(sp.simplify)
+            A2 = ((T * A + T.diff(TIME)) * Ti).applyfunc(sp.simplify)
+            A, B, rates = A2, (T * B + S.diff(TIME) - A2 * S).applyfunc(sp.simplify), S
+            C, D = (C * Ti).applyfunc(sp.simplify), (D - C * Ti * S).applyfunc(sp.simplify)
+            Wd = [powers[x][1] if x in powers else y for x, y in dep]
+            Jw = jacobian(Wd, X, point)
+            Jd, Ed = (Jw * Ti).applyfunc(sp.simplify), (jacobian(Wd, slots, point) - Jw * Ti * S).applyfunc(sp.simplify)
+            names = [powers[x][0].name if x in powers else x.name for x in X]
+            dep_names = [powers[x][0].name if x in powers else x.name for x, _ in dep]
+        dX = sp.Matrix([sp.Symbol(DELTA + n) for n in names])
+        dU = sp.Matrix([sp.Symbol(DELTA + col["name"]) for col in cols])
+        lin = lambda M, N: list(M * dX + N * dU) if M.rows else []  # noqa: E731
+        columns = [{**col, "slot": u, "shown": u, "value": u, "name": u.name, "defines": col} for col, u in zip(cols, dU)]
+        dots = lin(A, B)
+        used = [j for j in range(len(cols)) if rates is not None and any(rates[:, j])]
+        if used:  # the rates of the inputs a power variable depends on
+            dR = [sp.Symbol(DELTA + cols[j]["name"] + DOT) for j in used]
+            dots = [d + sum(rates[i, j] * r for j, r in zip(used, dR)) for i, d in enumerate(dots)]
+            columns += [{"slot": r, "shown": r, "value": r, "name": r.name, "sources": [], "rate": True} for r in dR]
+            out["hint"] = INPUT_RATES
+        out.update(states=list(dX), dots=dots, linearized=True, columns=columns,
+                   outputs=[(DELTA + name, y) for (name, _), y in zip(Ys, lin(C, D))],
+                   dependent=[(sp.Symbol(DELTA + n), y) for n, y in zip(dep_names, lin(Jd, Ed))],
+                   operating=[sp.simplify(f.xreplace(point)) for f in F])
+    elif powers:
+        # Exact: invert the new variables for the states, w = W(x, u) -> x = X(w, u),
+        # and differentiate: dw/dt = dW/dx dx/dt + dW/du du/dt + dW/dt. W depends on an
+        # input when a source drives storage in derivative causality that W reads,
+        # and on time when a storage law is modulated by it.
+        storage = [x for x in X if x in powers]
+        W = [powers[x][1] for x in storage]
+        # SymPy can take forever on laws that couple states nonlinearly (a cubic system
+        # for a capacitive transducer), so it's only asked for an inverse that's linear,
+        # or where each new variable depends on one state.
+        coupled = any(len(w.free_symbols & set(storage)) > 1 for w in W)
+        if coupled and sp.Matrix(W).jacobian(storage).free_symbols & set(storage):
+            out["note"] = ("These storage laws couple the states nonlinearly, so they can't be inverted to write the states "
+                           "in these variables. The linear approximation can.")
+            return out
+        try:
+            inverses = sp.solve([powers[x][0] - w for x, w in zip(storage, W)], storage, dict=True)
+        except NotImplementedError:
+            inverses = []
+        inverses = [inv for inv in inverses if set(inv) == set(storage)]
+        if not inverses:
+            out["note"] = "SymPy couldn't invert a storage law to write the states in these variables. Try the linear approximation."
+            return out
+        inv = max(inverses, key=lambda i: (round_trips(i, storage, [powers[x][0] for x in storage], W, slots), real_samples(list(i.values()))))
+        hints = []
+        if any(p.exp.is_Rational and not p.exp.is_Integer for value in inv.values() for p in value.atoms(sp.Pow)):
+            hints.append("Writing the states in these variables took the inverse of a nonlinear storage law, which has roots in it. "
+                         "Where it has several, the one kept gives back states that are small next to the parameters. "
+                         "The linear approximation is simpler.")
+        used = [col for col in cols if any(w.has(col["slot"]) for w in W)]
+        rate_cols = [{"slot": sp.Dummy(col["name"] + DOT), "shown": sp.Symbol(col["name"] + DOT), "value": sp.diff(col["value"], TIME),
+                      "name": col["name"] + DOT, "sources": [], "rate": True} for col in used]
+        Wm = sp.Matrix(W) if W else sp.zeros(0, 1)
+        rate = Wm.jacobian(storage) * sp.Matrix([F[X.index(x)] for x in storage]) + Wm.diff(TIME) if storage else sp.Matrix([])
+        if used:
+            rate += Wm.jacobian([col["slot"] for col in used]) * sp.Matrix([r["slot"] for r in rate_cols])
+            hints.append(INPUT_RATES)
+        out.update(states=[powers[x][0] if x in powers else x for x in X], columns=cols + rate_cols, hint=" ".join(hints),
+                   dots=[sp.simplify((rate[storage.index(x)] if x in powers else f).xreplace(inv)) for x, f in zip(X, F)],
+                   outputs=[(name, sp.simplify(y.xreplace(inv))) for name, y in Y],
+                   dependent=[(powers[x][0], sp.simplify(powers[x][1].xreplace(inv))) if x in powers else (x, sp.simplify(y.xreplace(inv)))
+                              for x, y in dep])
+
+    return out
+
+
+def round_trips(inverse: dict, states: list, ws: list, W: list, others) -> int:
+    """At how many random points x = inverse(w) gives back the x that w = W(x) came from.
+
+    Several inverses (x = l - r and x = l + r) are told apart this way. The states and
+    inputs are sampled small next to the parameters, as in most models (a
+    displacement smaller than the gap it closes), so the physical one wins.
+    """
+    rng = random.Random(1)
+    small = set(states) | set(others)
+    atoms = (set().union(*(w.free_symbols | w.atoms(AppliedUndef) for w in W), *(v.free_symbols for v in inverse.values())) | small) - set(ws)
+    hits = 0
+    for _ in range(8):
+        point = {a: sp.Float(rng.uniform(0.01, 0.1) if a in small else rng.uniform(0.5, 1)) for a in atoms}
+        try:
+            w = {wi: Wi.xreplace(point) for wi, Wi in zip(ws, W)}
+            back = [complex(inverse[x].xreplace(point).xreplace(w).evalf()) for x in states]
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        hits += all(abs(b - complex(point[x])) < 1e-6 * (1 + abs(b)) for b, x in zip(back, states))
+    return hits
+
+
+def latex_report(m: Model, c, variables: str = "energy", linearize: bool = False, system: dict | None = None) -> dict:
+    """The state and output equations as LaTeX, one per line and in matrix form, for --latex and the editor.
+
+    `variables` and `linearize` pick the view (see view); `system` is a
+    derive_system() result, so that several views share one solve.
+    """
+    v = view(m, c, variables, linearize, system)
+    X, F, Y, cols = v["states"], v["dots"], v["outputs"], v["columns"]
+    inline = {col["slot"]: col["value"] for col in cols}
+    pairs = [(tex_name(x.name, dot=True), tex(d.xreplace(inline))) for x, d in zip(X, F)]
+    outs = [(tex_name(name), tex(y.xreplace(inline))) for name, y in Y]
+    # A deviation δu_F stands for u_F's, so its definition still applies; a rate's follows from it.
+    defines = [col.get("defines", col) for col in cols if not col.get("rate")]
+    where = [f"{tex(d['shown'])} = {tex(d['value'])}" for d in defines if d["shown"] != d["value"]]
     out = {
-        "states": [tex_name(str(x)) for x in states],
+        "variables": v["variables"], "linearized": v["linearized"], "nonlinear": v["nonlinear"], "note": v["note"], "hint": v["hint"],
+        "states": [tex_name(x.name) for x in X],
         "equations": pairs,
         "outputs": outs,
-        "unsolved_outputs": stuck,
-        "separate": "\\begin{aligned}\n" + " \\\\[1ex]\n".join(groups) + "\n\\end{aligned}",
-        "solved": sol is not None,
-        "full": [tex(eq) + " = 0" for eq in eqs],
+        "unsolved_outputs": v["unsolved_outputs"],
+        "separate": aligned([pairs, outs], where if v["linearized"] else []),
+        "solved": v["solved"],
+        "full": [tex(eq) + " = 0" for eq in v["equations"]],
         "matrix": None, "linear": False, "outputs_linear": False, "inputs": [],
         "reductions": [{"text": text, "math": r",\quad ".join(f"{tex_name(name)} = {tex(value)}" for name, value in laws)}
-                       for text, laws in reduction.get("steps", [])],
-        "dependent": [f"{tex_name(str(x))} = {tex(value)}" for x, value in reduction.get("dependent", [])],
+                       for text, laws in v["steps"]],
+        "dependent": [f"{tex_name(str(x))} = {tex(value.xreplace(inline))}" for x, value in v["dependent"]],
+        "operating": aligned([[("0", tex(f)) for f in v["operating"]]]) if v["operating"] else None,
     }
-    if not states or sol is None:
+    if v["note"] or not X or not v["solved"]:
         return out
-    # Each source becomes an entry of u: its value when that's a lone name or
-    # input like v(t), else u_<source> defined underneath.
-    shown = {u: value if isinstance(value, (sp.Symbol, AppliedUndef)) else sp.Symbol("u_" + src)
-             for u, (src, value) in given.items()}
-    columns = list(dict.fromkeys(shown.values()))  # two sources fed by one v(t) share a column
-    slot = {name: sp.Dummy() for name in columns}
+    slots = [col["slot"] for col in cols]
     uses_u = False
 
     def form(lhs, exprs):
         """lhs = M x + N u (+ the rest), or lhs = the vector of exprs when they aren't linear in x and u."""
         nonlocal uses_u
-        split = state_space(states, [y.xreplace({u: slot[shown[u]] for u in given}) for y in exprs], list(slot.values()))
+        split = state_space(X, exprs, slots)
         if split is None:
-            return f"{lhs} = {tex(sp.Matrix([y.xreplace(values) for y in exprs]))}", False
+            return f"{lhs} = {tex(sp.Matrix([y.xreplace(inline) for y in exprs]))}", False
         M, N, rest = split
-        rhs = [f"{tex(M)} {tex_column(tex_name(str(x)) for x in states)}"]
+        rhs = [f"{tex(M)} {tex_column(tex_name(x.name) for x in X)}"]
         if any(N):
-            rhs.append(f"{tex(N)} {tex_column(tex(name) for name in columns)}")
+            rhs.append(f"{tex(N)} {tex_column(tex(col['shown']) for col in cols)}")
             uses_u = True
         if any(rest):
             rhs.append(tex(rest))
         return f"{lhs} = " + " + ".join(rhs), True
 
     rows = []
-    row, out["linear"] = form(tex_column(tex_name(str(x), dot=True) for x in states), dots)
+    row, out["linear"] = form(tex_column(tex_name(x.name, dot=True) for x in X), F)
     rows.append(row)
-    if ys and not stuck:
-        row, out["outputs_linear"] = form(tex_column(tex_name(name) for name in ys), list(ys.values()))
+    if Y and not v["unsolved_outputs"]:
+        row, out["outputs_linear"] = form(tex_column(tex_name(name) for name, _ in Y), [y for _, y in Y])
         rows.append(row)
     if uses_u:
-        out["inputs"] = [f"{tex(shown[u])} = {tex(value)}" for u, (_, value) in given.items() if shown[u] != value]
+        out["inputs"] = where
     if out["inputs"]:
         rows.append("\\text{where } " + ",\\quad ".join(out["inputs"]))
     out["matrix"] = rows[0] if len(rows) == 1 else "\\begin{gathered}\n" + " \\\\\n".join(rows) + "\n\\end{gathered}"
+    return out
+
+
+def aligned(groups, where=()) -> str:
+    """Groups of (lhs, rhs) as one aligned block, a little apart, then a where line."""
+    blocks = [" \\\\\n".join(f"{l} &= {r}" for l, r in group) for group in groups if group]
+    if where:
+        blocks.append(r"&\text{where } " + ",\\quad ".join(where))
+    return "\\begin{aligned}\n" + " \\\\[1ex]\n".join(blocks) + "\n\\end{aligned}"
+
+
+def view_text(v: dict) -> dict:
+    """A view's sections as plain text, for the CLI: heading -> lines."""
+    cols = v["columns"]
+    inline = {col["slot"]: col["value"] for col in cols}
+    show = lambda e: str(e.xreplace(inline))  # noqa: E731
+    defines = [col.get("defines", col) for col in cols if not col.get("rate")]
+    where = [f"{d['shown']} = {d['value']}" for d in defines if d["shown"] != d["value"]]
+    out = {"Note": [v["hint"]]} if v["hint"] else {}
+    if v["linearized"]:
+        out["Linear approximation about an operating point (x‾, u‾); the state derivatives there, each 0 at an equilibrium"] = \
+            [f"{show(f)} = 0" for f in v["operating"]]
+    kind = {"power": "power variables", "lagrange": "Lagrange variables"}.get(v["variables"], "deviations" if v["linearized"] else "")
+    out[f"States ({kind})" if kind else "States"] = [", ".join(map(str, v["states"]))]
+    out["State equations"] = [f"d({x})/dt = {show(f)}" for x, f in zip(v["states"], v["dots"])]
+    if v["dependent"]:
+        out["Storage in derivative causality (follows the states)"] = [f"{x} = {show(y)}" for x, y in v["dependent"]]
+    if v["outputs"]:
+        out["Outputs"] = [f"{name} = {show(y)}" for name, y in v["outputs"]]
+    if where and v["linearized"]:
+        out["Inputs"] = where
     return out
 
 
@@ -759,20 +1102,43 @@ def main():
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--latex", nargs="?", const="equations", choices=["equations", "matrix"],
                     help="print the state equations as LaTeX, one per state or in matrix form")
+    ap.add_argument("--variables", choices=VARIABLES, default="energy",
+                    help="energy: states p and q (the default); power: each storage element's effort or flow "
+                         "in their place; lagrange: displacements q and flows f, each I element's flow in place of its p")
+    ap.add_argument("--linearize", action="store_true",
+                    help="show a nonlinear model's linear approximation about an operating point")
     args = ap.parse_args()
     try:
         m = parse(args.file); c = causality(m)
         if args.latex:
-            latex = latex_report(m, c)
+            latex = latex_report(m, c, args.variables, args.linearize)
             if args.json:
                 print(json.dumps(latex, indent=2)); return
+            if latex["note"]:
+                sys.exit(latex["note"])
             print(latex["separate"] if args.latex == "equations" else latex["matrix"] or latex["separate"])
             for line in [f"{step['text']}: {step['math']}" for step in latex["reductions"]] + latex["dependent"]:
                 print("% " + line)
             if not latex["solved"]:
                 sys.exit("Unable to eliminate algebraic variables; run without --latex for the full equations.")
+            if latex["operating"]:
+                print("% Linear approximation about an operating point; there, each of these is 0 at an equilibrium:")
+                print("% " + latex["operating"].replace("\n", " "))
+            if latex["hint"]:
+                print("% " + latex["hint"])
             if latex["unsolved_outputs"]:
                 print(f"% Unable to write {', '.join(latex['unsolved_outputs'])} in terms of the states and inputs.")
+            return
+        if args.variables != "energy" or args.linearize:
+            v = view(m, c, args.variables, args.linearize)
+            if v["note"]:
+                sys.exit(v["note"])
+            sections = view_text(v)
+            if args.json:
+                print(json.dumps(sections, indent=2)); return
+            print("\n\n".join(heading + ":\n" + "\n".join("  " + line for line in lines) for heading, lines in sections.items()))
+            if not v["nonlinear"] and args.linearize:
+                print("\n(The model is linear, so it's its own linear approximation.)")
             return
         reduction: dict = {}
         outputs: dict = {}

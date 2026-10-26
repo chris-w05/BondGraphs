@@ -137,6 +137,10 @@ select.btn { padding-right: 8px; }
 .node.st-der .box { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 1.6; }
 .node.st-bad .box { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.8; }
 .node .ring { fill: none; stroke: var(--accent); stroke-width: 2; }
+.node .inner { fill: none; stroke: var(--line-strong); stroke-width: 1; pointer-events: none; } /* fields: a double outline */
+.node.st-int .inner { stroke: var(--good); }
+.node.st-der .inner { stroke: var(--warn); }
+.node.st-bad .inner { stroke: var(--bad); }
 .node.linked .box { stroke: var(--series); stroke-width: 2.4; }
 .badge rect { stroke: none; }
 .badge text { font: 600 10px var(--font-math); font-style: italic; text-anchor: middle; dominant-baseline: central; fill: var(--on-status); }
@@ -173,7 +177,7 @@ select.btn { padding-right: 8px; }
 .statusbar .hint { margin-left: auto; color: var(--muted); }
 
 /* ---- popover */
-.popover { position: absolute; z-index: 5; width: 316px; max-width: calc(100% - 20px); background: var(--panel); border: 1px solid var(--line-strong);
+.popover { position: absolute; z-index: 5; width: 316px; max-width: calc(100% - 20px); max-height: calc(100% - 20px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line-strong);
   border-radius: 10px; box-shadow: var(--shadow); padding: 12px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
 .pop-head { display: flex; align-items: center; gap: 8px; }
 .pop-head .kind { font: 600 13px var(--font-mono); background: var(--bg); border-radius: 5px; padding: 2px 7px; }
@@ -188,6 +192,8 @@ select.btn { padding-right: 8px; }
 .law-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .law-row label { padding: 0 8px; display: flex; align-items: center; font: italic 15px var(--font-math); color: var(--ink-2); background: var(--bg); border-right: 1px solid var(--line); white-space: nowrap; }
 .law-row input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 7px 8px; font: 13px var(--font-mono); outline: none; }
+.law-row select { border: 0; border-right: 1px solid var(--line); background: var(--bg); padding: 0 2px 0 6px; font: italic 15px var(--font-math); color: var(--ink-2); cursor: pointer; }
+.port-head { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 .text-in { height: 32px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--paper); padding-inline: 8px; font: 13px var(--font-mono); min-width: 0; width: 100%; }
 .text-in:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .text-in.invalid, .law-row.invalid { border-color: var(--bad); }
@@ -280,6 +286,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
 .eq-head h2 { margin: 0 auto 0 0; font: 600 14px var(--font-display); white-space: nowrap; }
 .eq-head .x { order: 1; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; color: var(--muted); font-size: 17px; line-height: 1; }
 .eq-head .x:hover { background: var(--bg); color: var(--ink); }
+.eq-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .eq-status { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
 .spin { flex: none; width: 12px; height: 12px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -348,6 +355,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
           </button>
         </div>
         <div class="tool-group" role="group" aria-label="Elements" id="palette-elements"></div>
+        <div class="tool-group" role="group" aria-label="Multiport fields" id="palette-fields"></div>
         <div class="tool-group" role="group" aria-label="Junctions" id="palette-junctions"></div>
         <div class="tool-group" role="group" aria-label="History">
           <button class="tool" type="button" id="btn-undo" title="Undo (Ctrl+Z)" aria-label="Undo">
@@ -427,6 +435,14 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     </div>
     <button class="btn small" type="button" id="eq-copy">Copy LaTeX</button>
   </div>
+  <div class="eq-tools">
+    <div class="seg" role="group" aria-label="Variables">
+      <button type="button" data-eqvars="energy" aria-pressed="true" title="Energy variables: the states are the momenta p and displacements q">Energy</button>
+      <button type="button" data-eqvars="power" aria-pressed="false" title="Power variables: each storage element's effort (C) or flow (I) is the state in place of q or p">Power</button>
+      <button type="button" data-eqvars="lagrange" aria-pressed="false" title="Lagrange variables: the states are the displacements q and flows f, each I element's flow in place of its p">Lagrange</button>
+    </div>
+    <button class="btn small" type="button" id="eq-lin" aria-pressed="false" hidden title="Linearize the model about an operating point">Linear approximation</button>
+  </div>
   <div class="eq-status" id="eq-status" hidden aria-live="polite"></div>
   <div class="eq-body" id="eq-body"></div>
 </section>
@@ -437,6 +453,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
 <script src="engine.js"></script>
 <script src="bondgraph-py.js"></script>
 <script src="equations.js"></script>
+<script src="examples.js"></script>
 <script>
 (() => {
   "use strict";
@@ -453,6 +470,10 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     R: { title: "Resistance", desc: "Dissipates power: damper, resistor, valve.", key: "R", lawLabel: "R =" },
     TF: { title: "Transformer", desc: "Scales effort and flow: lever, gear pair, pulley.", key: "T", lawLabel: "n =" },
     GY: { title: "Gyrator", desc: "Turns flow into effort: DC motor, gyroscope.", key: "G", lawLabel: "n =" },
+    Cfield: { title: "Multiport capacitance", label: "C-field", prefix: "CF", key: "M", desc: "Stores displacement at every port, coupled: springs that share a load, a capacitive transducer. Each bond is a port." },
+    Ifield: { title: "Multiport inertance", label: "I-field", prefix: "IF", desc: "Stores momentum at every port, coupled: a rigid body seen at several points, coupled inductors. Each bond is a port." },
+    Rfield: { title: "Multiport resistance", label: "R-field", prefix: "RF", desc: "Dissipates through every port, coupled: a resistor network seen at its terminals, coupled dampers. Each bond is a port." },
+    ICfield: { title: "Multiport storage", label: "IC-field", prefix: "ICF", desc: "Mixed storage: a port with an e or q law stores displacement, one with an f or p law momentum. Each bond is a port." },
     "0": { title: "0-junction", desc: "Shared effort; flows sum to zero (parallel)." , key: "0" },
     "1": { title: "1-junction", desc: "Shared flow; efforts sum to zero (series).", key: "1" },
   };
@@ -477,6 +498,25 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   // Each function form's linear law, in terms of the coefficient {c}.
   const LINEAR = { R: { e: "{c}*f", f: "e/{c}" }, C: { e: "q/{c}", q: "{c}*e" }, I: { f: "p/{c}", p: "{c}*f" } };
   const OWN_TITLES = { e: "this element's effort", f: "the flow into this element", q: "this element's displacement", p: "this element's momentum" };
+  const PORT_TITLES = { e: "the effort at port ", f: "the flow into port ", q: "the displacement at port ", p: "the momentum at port " };
+
+  // Fields: one law per port, keyed by the variable it sets and the port (e1, q2, ...).
+  // A new port's law: uncoupled and linear, for the letter it's written with.
+  const FIELD_START = { Cfield: "e", Ifield: "f", Rfield: "e", ICfield: "e" };
+  function portLaw(kind, letter, k, name) {
+    const c = (s) => `${s}${k}_${name}`;
+    if (kind === "Rfield") return letter === "e" ? `${c("R")}*f${k}` : `e${k}/${c("R")}`;
+    return { e: `q${k}/${c("C")}`, q: `${c("C")}*e${k}`, f: `p${k}/${c("I")}`, p: `${c("I")}*f${k}` }[letter];
+  }
+  // [label, letter (null keeps each port's), law of port i of n, or null for portLaw]
+  const matrix = (s, v) => (i, n, name) => Array.from({ length: n }, (_, j) => `${s}${Math.min(i, j + 1)}${Math.max(i, j + 1)}_${name}*${v}${j + 1}`).join("+");
+  const FIELD_TEMPLATES = {
+    Cfield: [["Linear stiffness, e = K q (K symmetric)", "e", matrix("K", "q")], ["Linear compliance, q = C e (C symmetric)", "q", matrix("C", "e")]],
+    Ifield: [["Linear inertia, p = M f (M symmetric)", "p", matrix("M", "f")]],
+    Rfield: [["Linear resistance, e = R f (R symmetric)", "e", matrix("R", "f")], ["Linear conductance, f = G e (G symmetric)", "f", matrix("G", "e")]],
+    ICfield: [],
+  };
+  const fieldTemplates = (kind) => [["Uncoupled, one linear law per port", null, null]].concat(FIELD_TEMPLATES[kind]);
 
   // ------------------------------------------------------------------ state
   let graph = { nodes: [], bonds: [], outputs: [] };
@@ -485,7 +525,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   let nextNode = 1, nextBond = 1;
   const view = { x: 0, y: 0, k: 1 };
   const ui = { tool: "select", placing: null, sel: null, pop: null, mouse: null, drag: null, hoverIdx: null, linked: null, table: false };
-  let caus = { stroke: {}, storage: {}, conflicts: [], truncated: false };
+  let caus = { stroke: {}, storage: {}, ports: {}, conflicts: [], truncated: false };
   let sim = null, setupModel = null, series = new Map();
   const pm = () => (sim ? sim.model : null);
   const undoStack = [], redoStack = [];
@@ -565,6 +605,13 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       ["Outlet", "R", 480, 240, { R: "Piecewise((R_low,q_Tank>V_max),(R_high,True))" }],
     ], ["Qin>tank", "tank>Tank", "tank>Outlet"],
     { tEnd: 600, steps: 3000, params: { Q_in: "0.01", A: "1", rho: "1000", g: "9.81", R_high: "2e6", R_low: "6e5", V_max: "0.5" } })],
+    car: ["Car bounce and pitch (I-field)", () => example([
+      ["F", "Se", 100, 260, { value: "F0*Heaviside(t-0.5)" }], ["vf", "1", 280, 260], ["kf", "C", 200, 410, { C: "1/k_f" }], ["cf", "R", 360, 410, { R: "c_f" }],
+      ["Body", "Ifield", 450, 110, { p1: "((m*b^2+J)*f1+(m*a*b-J)*f2)/(a+b)^2", p2: "((m*a*b-J)*f1+(m*a^2+J)*f2)/(a+b)^2" }],
+      ["vr", "1", 620, 260], ["kr", "C", 540, 410, { C: "1/k_r" }], ["cr", "R", 700, 410, { R: "c_r" }],
+    ], ["F>vf", "vf>Body.1", "vf>kf", "vf>cf", "vr>Body.2", "vr>kr", "vr>cr"],
+    { tEnd: 4, steps: 2000, params: { m: "1500", J: "2500", a: "1.2", b: "1.5", k_f: "35000", k_r: "38000", c_f: "3000", c_r: "3200", F0: "2000" } },
+    [{ name: "heave", expr: "integral((b*f_Body+a*f_Body_2)/(a+b))" }, { name: "pitch", expr: "integral((f_Body-f_Body_2)/(a+b))" }])],
     par: ["Parallel capacitors (derivative causality)", () => example([
       ["Is", "Sf", 120, 240, { value: "1" }], ["n", "0", 300, 240], ["C1", "C", 230, 100, { C: "C_1" }],
       ["C2", "C", 380, 100, { C: "C_2" }], ["R1", "R", 480, 240, { R: "R" }],
@@ -589,7 +636,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   }
   function addNode(kind, x, y) {
     pushHistory();
-    const name = uniqueName(isJ({ kind }) ? "J" : kind);
+    const name = uniqueName(isJ({ kind }) ? "J" : KIND[kind].prefix || kind);
     const n = { id: nextNode++, kind, name, x: snap(x), y: snap(y), law: defaultLaw(kind, name) };
     graph.nodes.push(n);
     ui.sel = { type: "node", id: n.id };
@@ -600,11 +647,13 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     pushHistory();
     graph.bonds = graph.bonds.filter((b) => b.from !== id && b.to !== id);
     graph.nodes = graph.nodes.filter((n) => n.id !== id);
+    compactFieldPorts();
     closePopover(); ui.sel = null; changed();
   }
   function deleteBond(id) {
     pushHistory();
     graph.bonds = graph.bonds.filter((b) => b.id !== id);
+    compactFieldPorts();
     closePopover(); ui.sel = null; changed();
   }
   function reverseBond(id) {
@@ -636,8 +685,14 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (why) { toast(why); return; }
     pushHistory();
     const b = { id: nextBond++, from: fromId, to: toId };
-    if (BE.TWO_PORT[nodeById(fromId).kind]) b.fromPort = freePort(fromId, 2);
-    if (BE.TWO_PORT[nodeById(toId).kind]) b.toPort = freePort(toId, 1);
+    for (const [end, id, prefer] of [["fromPort", fromId, 2], ["toPort", toId, 1]]) {
+      const n = nodeById(id);
+      if (BE.TWO_PORT[n.kind]) b[end] = freePort(id, prefer);
+      if (BE.FIELD[n.kind]) { // a new port, after the others, with an uncoupled law
+        b[end] = BE.incident(graph, id).length + 1;
+        setPortLaw(n, b[end], FIELD_START[n.kind], portLaw(n.kind, FIELD_START[n.kind], b[end], n.name));
+      }
+    }
     graph.bonds.push(b);
     ui.sel = { type: "bond", id: b.id };
     changed();
@@ -650,6 +705,40 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     }
     changed();
   }
+  // Give port `port` of field n the law `letter + port = law`, replacing its old one.
+  function setPortLaw(n, port, letter, law) {
+    for (const k of Object.keys(n.law)) if (Number(k.slice(1)) === port) delete n.law[k];
+    n.law[letter + port] = law;
+  }
+  // A field's ports run 1..n. After bonds go, the ports above each gap move down,
+  // taking their laws and every name that refers to them (q_S_3 becomes q_S_2).
+  // In the field's own laws a removed port's variables become 0; elsewhere a name
+  // for it becomes e.g. e_S_2_removed, which shows up as an unknown parameter.
+  function compactFieldPorts() {
+    for (const n of graph.nodes) {
+      if (!BE.FIELD[n.kind]) continue;
+      const inc = BE.incident(graph, n.id);
+      const to = new Map(inc.map((b) => BE.portOf(b, n.id)).sort((a, b) => a - b).map((p, i) => [p, i + 1]));
+      for (const b of inc) { if (b.from === n.id) b.fromPort = to.get(b.fromPort); else b.toPort = to.get(b.toPort); }
+      const own = (src) => String(src).replace(/\b([efqp])(\d+)\b/g, (_, v, p) => (to.has(+p) ? v + to.get(+p) : "0"));
+      const law = {};
+      for (const [k, v] of Object.entries(n.law)) { const p = to.get(Number(k.slice(1))); if (p) law[k[0] + p] = own(v); }
+      n.law = law;
+      if ([...to].some(([a, b]) => a !== b)) renameRefs(n.name, (port) => (to.has(port) ? BE.portName(n.name, to.get(port)) : `${BE.portName(n.name, port)}_removed`));
+    }
+  }
+  // Rewrite every e_X, f_X, q_X, p_X and e_X_2 ... in the laws, outputs, initial
+  // conditions and plots, with X_k (port k of node X) becoming name(k).
+  function renameRefs(old, name) {
+    const re = new RegExp(`\\b([qpef])_${old}(?:_(\\d+))?\\b`, "g");
+    const sub = (s) => String(s).replace(re, (_, v, p) => `${v}_${name(p ? Number(p) : 1)}`);
+    for (const m of graph.nodes) for (const k of Object.keys(m.law || {})) m.law[k] = sub(m.law[k]);
+    for (const o of graph.outputs) o.expr = sub(o.expr);
+    for (const k of Object.keys(settings.init)) {
+      const nk = sub(k); if (nk !== k) { settings.init[nk] = settings.init[k]; delete settings.init[k]; }
+    }
+    plots.hidden = plots.hidden.map(sub); plots.extra = plots.extra.map(sub);
+  }
   function renameNode(n, newName) {
     newName = newName.trim();
     if (newName === n.name) return "";
@@ -658,10 +747,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (BE.RESERVED[newName]) return `${newName} is reserved in SymPy; pick another name.`;
     pushHistory();
     const old = n.name;
-    const re = new RegExp(`\\b([qpef])_${old}(_2)?\\b`, "g");
-    const sub = (s) => String(s).replace(re, (_, v, two) => `${v}_${newName}${two || ""}`);
-    for (const m of graph.nodes) for (const k of Object.keys(m.law || {})) m.law[k] = sub(m.law[k]);
-    for (const o of graph.outputs) o.expr = sub(o.expr);
+    renameRefs(old, (port) => BE.portName(newName, port));
     // Carry default parameter names (C_C1 -> C_k) and their values along.
     const key = lawKey(n);
     if (key && key === BE.LAW_KEY[n.kind]) {
@@ -672,10 +758,6 @@ table.data tr:nth-child(even) td { background: var(--bg); }
         if (dflt in settings.params) { settings.params[nd] = settings.params[dflt]; delete settings.params[dflt]; }
       }
     }
-    for (const k of Object.keys(settings.init)) {
-      const nk = sub(k); if (nk !== k) { settings.init[nk] = settings.init[k]; delete settings.init[k]; }
-    }
-    plots.hidden = plots.hidden.map(sub); plots.extra = plots.extra.map(sub);
     n.name = newName;
     changed();
     return "";
@@ -719,7 +801,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   };
   function box(n) {
     if (isJ(n)) return { hw: 15, hh: 15, round: true };
-    const len = n.kind.length + 1 + n.name.length, law = lawText(n).length;
+    const len = (KIND[n.kind].label || n.kind).length + 1 + n.name.length, law = lawText(n).length;
     return { hw: (Math.max(len * 8.43, law * 6.33) + 20) / 2, hh: law ? 20 : 15 };
   }
   function clipPoint(n, ux, uy) {
@@ -738,8 +820,9 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (parent) parent.appendChild(e);
     return e;
   };
+  // A field is "derivative" if any of its ports is.
   function storageStatus(n) {
-    if (!BE.STORAGE[n.kind]) return null;
+    if (!BE.STORAGE[n.kind] && !BE.FIELD[n.kind]) return null;
     if (!BE.incident(graph, n.id).length) return null;
     return caus.storage[n.id] || null;
   }
@@ -781,7 +864,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       el("line", { class: "stroke", x1: s.x + nx * 8, y1: s.y + ny * 8, x2: s.x - nx * 8, y2: s.y - ny * 8 }, g);
     }
     for (const [n, p, sgn] of [[A, p1, 1], [B, p2, -1]]) {
-      if (!BE.TWO_PORT[n.kind]) continue;
+      if (!BE.ported(n.kind)) continue;
       const port = BE.portOf(b, n.id);
       const t = el("text", { class: "port", x: p.x + ux * sgn * 9 - nx * 9, y: p.y + uy * sgn * 9 - ny * 9 }, g);
       t.textContent = port;
@@ -792,6 +875,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   }
 
   function lawText(n) {
+    if (BE.FIELD[n.kind]) { const k = BE.incident(graph, n.id).length; return k ? `${k} port${k === 1 ? "" : "s"}` : ""; }
     const key = lawKey(n);
     if (!key) return "";
     const v = String((n.law && n.law[key]) || "");
@@ -812,6 +896,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       el("rect", { class: "ring", x: -b.hw - 4, y: -b.hh - 4, width: 2 * b.hw + 8, height: 2 * b.hh + 8, rx: b.round ? b.hw + 4 : 10 }, g);
     }
     el("rect", { class: "box", x: -b.hw, y: -b.hh, width: 2 * b.hw, height: 2 * b.hh, rx: b.round ? b.hw : 7 }, g);
+    if (BE.FIELD[n.kind]) el("rect", { class: "inner", x: -b.hw + 3, y: -b.hh + 3, width: 2 * b.hw - 6, height: 2 * b.hh - 6, rx: 5 }, g);
     const law = isJ(n) ? "" : lawText(n);
     const t = el("text", { class: "lbl", x: 0, y: law ? -6.5 : 0.5 }, g);
     if (isJ(n)) {
@@ -819,7 +904,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       const jn = el("text", { class: "jn", x: 0, y: b.hh + 12 }, g);
       jn.textContent = n.name;
     } else {
-      const k = el("tspan", {}, t); k.textContent = n.kind;
+      const k = el("tspan", {}, t); k.textContent = KIND[n.kind].label || n.kind;
       const nm = el("tspan", { class: "nm" }, t); nm.textContent = ":" + n.name;
       if (law) { const lt = el("text", { class: "law", x: 0, y: 9.5 }, g); lt.textContent = law; }
     }
@@ -853,7 +938,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       const b = box(fake);
       const g = el("g", { class: "node ghost " + (isJ(fake) ? "junction" : ""), transform: `translate(${fake.x} ${fake.y})` }, ov);
       el("rect", { class: "box", x: -b.hw, y: -b.hh, width: 2 * b.hw, height: 2 * b.hh, rx: b.round ? b.hw : 7 }, g);
-      const t = el("text", { class: "lbl", x: 0, y: 0.5 }, g); t.textContent = fake.kind;
+      const t = el("text", { class: "lbl", x: 0, y: 0.5 }, g); t.textContent = KIND[fake.kind].label || fake.kind;
     }
   }
 
@@ -861,7 +946,11 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const bar = $("#statusbar");
     bar.replaceChildren();
     let nInt = 0, nDer = 0;
-    for (const n of graph.nodes) { const s = storageStatus(n); if (s === "integral") nInt++; if (s === "derivative") nDer++; }
+    for (const n of graph.nodes) {
+      // A field counts each storage port.
+      const each = BE.FIELD[n.kind] ? Object.values(caus.ports[n.id] || {}) : [storageStatus(n)];
+      for (const s of each) { if (s === "integral") nInt++; if (s === "derivative") nDer++; }
+    }
     const chip = (cls, dot, text, title) => {
       const c = document.createElement("span"); c.className = "chip " + cls; c.title = title;
       const d = document.createElement("span"); d.className = "dot"; d.textContent = dot;
@@ -871,7 +960,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     chip("der", "d/dt", `${nDer} derivative`, "Storage elements in derivative causality: they follow the other states");
     if (caus.conflicts.length) chip("bad", "!", `${caus.conflicts.length} conflict${caus.conflicts.length > 1 ? "s" : ""}`, caus.conflicts.map((c) => c.msg).join("\n"));
     const hint = document.createElement("span"); hint.className = "hint";
-    hint.textContent = ui.placing ? `Click to place ${KIND[ui.placing].title.toLowerCase()} · Esc cancels`
+    hint.textContent = ui.placing ? `Click to place ${BE.FIELD[ui.placing] ? "a field" : KIND[ui.placing].title.toLowerCase()} · Esc cancels`
       : ui.tool === "bond" ? "Drag from one node to another; power flows the way you drag"
       : "Click a node to edit its law · Shift-drag between nodes to bond · drag empty space to pan";
     bar.appendChild(hint);
@@ -907,7 +996,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const info = KIND[n.kind];
     pop.setAttribute("aria-label", `${info.title} ${n.name}`);
     pop.append(h("div", { class: "pop-head" },
-      h("span", { class: "kind" }, n.kind), h("span", { class: "title" }, info.title),
+      h("span", { class: "kind" }, info.label || n.kind), h("span", { class: "title" }, info.title),
       h("button", { class: "x", type: "button", "aria-label": "Close", onclick: () => { closePopover(); } }, "×")));
     pop.append(h("div", { class: "pop-desc" }, info.desc));
 
@@ -922,7 +1011,8 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } });
     pop.append(h("label", { class: "field", for: "pop-name" }, h("span", null, "Name"), nameIn), nameErr);
 
-    if (isJ(n)) {
+    if (BE.FIELD[n.kind]) buildFieldBody(pop, n);
+    else if (isJ(n)) {
       const seg = h("div", { class: "seg", role: "group", "aria-label": "Junction type" });
       for (const k of ["0", "1"]) seg.append(h("button", { type: "button", "aria-pressed": String(n.kind === k),
         onclick: () => { if (n.kind !== k) { pushHistory(); n.kind = k; changed(); buildPopover(); } } }, k === "0" ? "0 · shared effort" : "1 · shared flow"));
@@ -982,6 +1072,78 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     updatePopoverStatus();
   }
 
+  // A field: its type, then a law per port, each written for the variable it sets.
+  function buildFieldBody(pop, n) {
+    const seg = h("div", { class: "seg", role: "group", "aria-label": "Field type" });
+    for (const k of Object.keys(BE.FIELD)) seg.append(h("button", { type: "button", "aria-pressed": String(n.kind === k), title: KIND[k].desc,
+      onclick: () => switchFieldKind(n, k) }, KIND[k].label.replace("-field", "")));
+    pop.append(h("div", { class: "field" }, h("span", null, "Type"), seg));
+    const ports = BE.fieldPorts(graph, n);
+    if (!ports.length) { pop.append(h("div", { class: "pop-desc" }, "Bond it to junctions: each bond is a port, numbered in the order you add them.")); return; }
+    const list = h("div", { class: "field" }, h("span", null, "Constitutive laws, one per port"));
+    for (const fp of ports) {
+      const other = nodeById(fp.bond.from === n.id ? fp.bond.to : fp.bond.from);
+      const form = h("select", { "aria-label": `Variable port ${fp.port}'s law sets`, onchange: (e) => {
+        pushHistory(); setPortLaw(n, fp.port, e.target.value, portLaw(n.kind, e.target.value, fp.port, n.name)); changed(); buildPopover();
+      } });
+      for (const l of BE.FIELD[n.kind]) form.append(h("option", { value: l, selected: l === (fp.letter || FIELD_START[n.kind]) }, `${l}${fp.port} =`));
+      const input = h("input", { "data-port": fp.port, value: fp.law || "", spellcheck: false, autocomplete: "off", "aria-label": `Law for port ${fp.port}`,
+        onfocus: (e) => { pushHistory(); ui.portInput = e.target; },
+        oninput: (e) => { setPortLaw(n, fp.port, fp.letter || FIELD_START[n.kind], e.target.value); changed({ soft: true }); showPortErrors(n); } });
+      list.append(h("div", { class: "port-head" }, `Port ${fp.port} ↔ ${other ? other.name : "?"}`),
+        h("div", { class: "law-row", "data-port-row": fp.port }, form, input), h("div", { class: "err", "data-port-err": fp.port, hidden: true }));
+    }
+    pop.append(list);
+    // Its own variables, inserted into the port law last focused.
+    const chips = h("div", { class: "chips" });
+    BE.fieldOwn(ports).concat("t").forEach((v) => chips.append(h("button", { type: "button", title: "Insert " + (v === "t" ? "time" : PORT_TITLES[v[0]] + v.slice(1)),
+      onclick: () => insertAtCursor(pop.contains(ui.portInput) ? ui.portInput : pop.querySelector("[data-port]"), v) }, v)));
+    const tpl = h("select", { class: "btn small", "aria-label": "Fill in every port's law", onchange: (e) => {
+      const t = fieldTemplates(n.kind)[e.target.value];
+      if (t) applyFieldTemplate(n, t);
+    } }, h("option", { value: "" }, "Common laws…"));
+    fieldTemplates(n.kind).forEach(([text], i) => tpl.append(h("option", { value: String(i) }, text)));
+    pop.append(h("div", { class: "row", style: "justify-content: space-between; flex-wrap: wrap" }, chips, tpl));
+    showPortErrors(n);
+  }
+  function showPortErrors(n) {
+    const ports = BE.fieldPorts(graph, n), own = BE.fieldOwn(ports);
+    for (const fp of ports) {
+      const err = $(`#popover [data-port-err="${fp.port}"]`), row = $(`#popover [data-port-row="${fp.port}"]`);
+      if (!err || !row) continue;
+      let msg = "";
+      try {
+        const ast = BE.parse(fp.law || ""); BE.checkReserved(ast);
+        const stray = BE.strayOwn(ast, own);
+        if (stray) msg = `${stray} isn't one of its variables`;
+      } catch (e) { msg = e.message; }
+      err.hidden = !msg; err.textContent = msg ? "Can't read this law: " + msg : "";
+      row.classList.toggle("invalid", !!msg);
+    }
+  }
+  // Change a field's type. A law carries over when the new type writes its letter the
+  // same way (C and IC share e and q, I and IC f and p); the rest restart uncoupled.
+  function switchFieldKind(n, kind) {
+    if (n.kind === kind) return;
+    pushHistory();
+    const ports = BE.fieldPorts(graph, n), wasR = n.kind === "Rfield";
+    n.kind = kind;
+    for (const fp of ports) {
+      if (fp.letter && BE.FIELD[kind].includes(fp.letter) && wasR === (kind === "Rfield")) continue;
+      setPortLaw(n, fp.port, FIELD_START[kind], portLaw(kind, FIELD_START[kind], fp.port, n.name));
+    }
+    changed(); buildPopover();
+  }
+  function applyFieldTemplate(n, [, letter, law]) {
+    pushHistory();
+    const ports = BE.fieldPorts(graph, n);
+    for (const fp of ports) {
+      const l = letter || fp.letter || FIELD_START[n.kind];
+      setPortLaw(n, fp.port, l, law ? law(fp.port, ports.length, n.name) : portLaw(n.kind, l, fp.port, n.name));
+    }
+    changed(); buildPopover();
+  }
+
   function insertAtCursor(input, text) {
     pushHistory();
     const s = input.selectionStart ?? input.value.length, e = input.selectionEnd ?? s;
@@ -1034,6 +1196,15 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const inc = BE.incident(graph, n.id);
     if (!inc.length) { box.append(h("span", null, "Not bonded yet. Switch to Bond and drag from this node.")); return; }
     if (conflict) { box.append(chip("bad", "!"), h("span", null, "Causal conflict: " + conflict.msg.split(": ").slice(1).join(": ") + ".")); return; }
+    if (n.kind === "Rfield") { box.append(h("span", null, "Each port takes the causality the graph leaves it; the solver inverts the laws when it has to.")); return; }
+    if (BE.FIELD[n.kind]) {
+      box.append(h("div", null, ...BE.fieldPorts(graph, n).map((fp) => {
+        const st = BE.storageOf(caus, n.id, fp.port), name = h("code", null, BE.fieldStateName(n, fp));
+        return st === "integral" ? h("div", null, chip("int", "∫"), ` Port ${fp.port}: integral causality, state `, name, ".")
+          : h("div", null, chip("der", "d/dt"), ` Port ${fp.port}: derivative causality; `, name, " follows the other states.");
+      })));
+      return;
+    }
     const st = storageStatus(n);
     const sname = BE.stateName(n);
     if (st === "integral") box.append(chip("int", "∫"), h("span", null, h("b", null, "Integral causality. "), "State ", h("code", null, sname), n.kind === "C" ? " (displacement)." : " (momentum)."));
@@ -1194,8 +1365,8 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     renderKV("inits", "sec-init", m.states.map((s) => {
       if (s.aux) return { name: s.name, label: s.name + "(0) =", note: `integral output, ${s.arg.trim()}`, disabled: "" };
       const node = nodeById(s.node);
-      const dep = caus.storage[s.node] === "derivative";
-      return { name: s.name, label: s.name + "(0) =", note: `${node.kind === "C" ? "displacement" : "momentum"} of ${node.name}`, disabled: dep ? "set by the other states" : "" };
+      const dep = BE.storageOf(caus, s.node, s.port) === "derivative";
+      return { name: s.name, label: s.name + "(0) =", note: `${s.kind === "C" ? "displacement" : "momentum"} of ${node.name}${s.port ? `, port ${s.port}` : ""}`, disabled: dep ? "set by the other states" : "" };
     }), (n) => settings.init[n] ?? "", (n, v) => { settings.init[n] = v; }, { placeholder: "0" });
     // Mark invalid parameter entries inline.
     for (const e of m.errors) {
@@ -1307,8 +1478,8 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (info.kind === "state") {
       const n = nodeById(info.node);
       if (!n) return { key: name, name, index: i, desc: "removed from the graph", node: null };
-      const dep = caus.storage[info.node] === "derivative";
-      return { key: name, name, index: i, desc: `${n.kind === "C" ? "displacement" : "momentum"} of ${n.name}`, dep, node: n.id };
+      const dep = BE.storageOf(caus, info.node, info.port) === "derivative";
+      return { key: name, name, index: i, desc: `${name.startsWith("q_") ? "displacement" : "momentum"} of ${n.name}${info.port ? ` port ${info.port}` : ""}`, dep, node: n.id };
     }
     const b = bondById(info.bond);
     const A = b && nodeById(b.from), B = b && nodeById(b.to);
@@ -1556,9 +1727,14 @@ table.data tr:nth-child(even) td { background: var(--bg); }
   // SymPy solves the exported .bond text in a worker (equations.js); the window
   // shows its LaTeX, one equation per state or as x' = A x + B u.
   const EQ_KEY = STORE_KEY + "-eq";
-  const eq = { open: false, mode: "separate", pos: null, out: null, msg: "", fatal: false, busy: false, status: "", key: "", req: 0, timer: 0, solver: null };
-  try { const s = JSON.parse(localStorage.getItem(EQ_KEY)); if (s) Object.assign(eq, { open: !!s.open, mode: s.mode === "matrix" ? "matrix" : "separate", pos: s.pos || null }); } catch (_) {}
-  function saveEq() { try { localStorage.setItem(EQ_KEY, JSON.stringify({ open: eq.open, mode: eq.mode, pos: eq.pos })); } catch (_) {} }
+  // vars: energy, power or lagrange; lin: show a nonlinear model's linear approximation.
+  const eq = { open: false, mode: "separate", vars: "energy", lin: false, pos: null, out: null, msg: "", fatal: false, busy: false, status: "", key: "", req: 0, timer: 0, solver: null };
+  try {
+    const s = JSON.parse(localStorage.getItem(EQ_KEY));
+    if (s) Object.assign(eq, { open: !!s.open, mode: s.mode === "matrix" ? "matrix" : "separate", pos: s.pos || null,
+      vars: ["power", "lagrange"].includes(s.vars) ? s.vars : "energy", lin: !!s.lin });
+  } catch (_) {}
+  function saveEq() { try { localStorage.setItem(EQ_KEY, JSON.stringify({ open: eq.open, mode: eq.mode, vars: eq.vars, lin: eq.lin, pos: eq.pos })); } catch (_) {} }
 
   function toggleEq(open) {
     eq.open = open === undefined ? !eq.open : open;
@@ -1588,18 +1764,22 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (why) { eq.req++; eq.key = ""; eq.out = null; eq.msg = why; eq.fatal = false; eq.busy = false; renderEq(); return; }
     // The solver uses the editor's causality, so the window always matches the strokes drawn.
     const integral = {};
-    for (const n of graph.nodes) if (caus.storage[n.id]) integral[n.name] = caus.storage[n.id] === "integral";
+    for (const n of graph.nodes) {
+      if (BE.FIELD[n.kind]) for (const [p, st] of Object.entries(caus.ports[n.id] || {})) integral[`${n.name}.${p}`] = st === "integral";
+      else if (caus.storage[n.id]) integral[n.name] = caus.storage[n.id] === "integral";
+    }
     // Only outputs that can be read go to SymPy, so one still being typed doesn't stop the rest.
     const outputs = graph.outputs.filter((o) => !outputError(o));
     const bond = BE.toBond(Object.assign({}, graph, { outputs })).split("\n").filter((l) => l && !l.startsWith("#")).join("\n"); // drop layout comments
-    const key = bond + JSON.stringify(integral);
+    const view = { variables: eq.vars, linearize: eq.lin };
+    const key = bond + JSON.stringify(integral) + JSON.stringify(view);
     if (key === eq.key && !eq.fatal) { renderEq(); return; } // only moved or restyled
     const req = ++eq.req; // a reply to an older request is ignored
     eq.key = key; eq.busy = true; eq.fatal = false;
     if (!eq.solver) eq.solver = window.BondEquations.createSolver((text) => { eq.status = text; renderEqStatus(); });
     eq.status = eq.status || "Solving…";
     renderEq();
-    eq.solver.solve(bond, integral, (r) => {
+    eq.solver.solve(bond, integral, view, (r) => {
       if (req !== eq.req) return;
       eq.busy = false; eq.status = "";
       eq.out = r.result || null; eq.msg = r.error || ""; eq.fatal = !!r.fatal;
@@ -1619,6 +1799,10 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     if (!eq.open) return;
     renderEqStatus();
     document.querySelectorAll("[data-eqmode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.eqmode === eq.mode)));
+    document.querySelectorAll("[data-eqvars]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.eqvars === eq.vars)));
+    // The linear approximation is offered for a nonlinear model only.
+    $("#eq-lin").hidden = !(eq.out && eq.out.nonlinear);
+    $("#eq-lin").setAttribute("aria-pressed", String(eq.lin));
     const body = $("#eq-body");
     body.classList.toggle("stale", eq.busy && !!eq.out);
     body.replaceChildren();
@@ -1633,18 +1817,24 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     const math = (src) => { const d = h("div"); window.katex.render(src, d, { displayMode: true, throwOnError: false }); body.append(d); };
     const outs = o.outputs || [], stuck = o.unsolved_outputs || [];
     const who = stuck.join(", ");
+    if (o.note) { note(o.note, "warn"); return; } // the view asked for isn't available
+    if (o.linearized) note("Linear approximation about an operating point (x̄, ū), in deviations δ from it.");
+    if (o.variables === "power" && o.states.length && o.solved) note("The states are the power variables: the effort of each C and the flow of each I, in place of q and p.");
+    if (o.variables === "lagrange" && o.states.length && o.solved) note("The states are the Lagrange variables: the displacement q of each C and the flow f of each I, in place of p.");
     if (!o.states.length) {
       note("No states: there's no C or I element in integral causality.");
       if (outs.length) math(o.separate);
     } else if (eq.mode === "matrix" && !o.solved) note("The matrix form needs every equation solved. Switch to Separate to see how far SymPy got.", "warn");
     else if (eq.mode === "matrix") {
-      math(o.matrix);
+      math(o.matrix || o.separate);
       const yRow = outs.length && !stuck.length, yCurved = yRow && !o.outputs_linear;
       if (!o.linear && yCurved) note("These equations aren't linear in the states and inputs, so they're shown as vectors, ẋ = f(x, u) and y = h(x, u).");
       else if (!o.linear) note(`${yRow ? "The state equations" : "These equations"} aren't linear in the states and inputs, so they're shown as one vector, ẋ = f(x, u).`);
       else if (yCurved) note("The outputs aren't linear in the states and inputs, so they're shown as one vector, y = h(x, u).");
       if (stuck.length) note(`SymPy couldn't write ${who} in terms of the states and inputs, so the outputs are left out. Switch to Separate to see how far it got.`, "warn");
     } else math(o.separate);
+    if (o.hint) note(o.hint);
+    if (o.operating) { note("At the operating point the state derivatives are these, each zero at an equilibrium:"); math(o.operating); }
     if (stuck.length && (!o.states.length || (eq.mode === "separate" && o.solved))) {
       note(`SymPy couldn't write ${who} in terms of the states and inputs, so ${stuck.length > 1 ? "they still contain" : "it still contains"} bond variables (e, f).`, "warn");
     }
@@ -1655,7 +1845,9 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       const d = h("div"); details.append(d);
       window.katex.render("\\begin{aligned}" + o.full.map((s) => s.replace(/ = 0$/, " &= 0")).join(" \\\\ ") + "\\end{aligned}", d, { displayMode: true, throwOnError: false });
     }
-    const dependent = graph.nodes.filter((n) => caus.storage[n.id] === "derivative").map((n) => n.name);
+    const dependent = graph.nodes.flatMap((n) => (BE.FIELD[n.kind]
+      ? Object.entries(caus.ports[n.id] || {}).filter(([, st]) => st === "derivative").map(([p]) => `${n.name} port ${p}`)
+      : caus.storage[n.id] === "derivative" ? [n.name] : []));
     const many = dependent.length > 1;
     if (o.reductions && o.reductions.length) {
       note("Solved after reducing the graph:");
@@ -1666,15 +1858,15 @@ table.data tr:nth-child(even) td { background: var(--bg); }
         list.append(h("li", null, r.text[0].toUpperCase() + r.text.slice(1) + ": ", m));
       }
       body.append(list);
-      if (o.dependent.length) {
-        note(`${dependent.join(", ")} ${many ? "are" : "is"} in derivative causality, so ${many ? "they follow" : "it follows"} the states:`);
-        math("\\begin{aligned}" + o.dependent.map((s) => s.replace(" = ", " &= ")).join(" \\\\ ") + "\\end{aligned}");
-      }
+    }
+    if (o.dependent.length) {
+      note(`${dependent.join(", ")} ${many ? "are" : "is"} in derivative causality, so ${many ? "they follow" : "it follows"} the states:`);
+      math("\\begin{aligned}" + o.dependent.map((s) => s.replace(" = ", " &= ")).join(" \\\\ ") + "\\end{aligned}");
     } else if (dependent.length) note(`${dependent.join(", ")} ${many ? "are" : "is"} in derivative causality, so ${many ? "they aren't states" : "it isn't a state"}.`);
   }
   function copyEq() {
     const o = eq.out;
-    if (!o || (!o.states.length && !(o.outputs || []).length)) { toast("Nothing to copy yet."); return; }
+    if (!o || o.note || (!o.states.length && !(o.outputs || []).length)) { toast("Nothing to copy yet."); return; }
     const matrix = eq.mode === "matrix" && !!o.matrix;
     copyText(matrix ? o.matrix : o.separate, matrix ? "Copied the matrix form as LaTeX." : "Copied the equations as LaTeX.");
   }
@@ -1690,6 +1882,9 @@ table.data tr:nth-child(even) td { background: var(--bg); }
     $("#eq-close").addEventListener("click", () => toggleEq(false));
     $("#eq-copy").addEventListener("click", copyEq);
     document.querySelectorAll("[data-eqmode]").forEach((b) => b.addEventListener("click", () => { eq.mode = b.dataset.eqmode; saveEq(); renderEq(); }));
+    // A different view is a new solve request; the worker reuses its last solve of the graph.
+    document.querySelectorAll("[data-eqvars]").forEach((b) => b.addEventListener("click", () => { eq.vars = b.dataset.eqvars; saveEq(); solveEq(); }));
+    $("#eq-lin").addEventListener("click", () => { eq.lin = !eq.lin; saveEq(); solveEq(); });
     const head = $("#eq-head");
     let drag = null;
     head.addEventListener("pointerdown", (e) => {
@@ -1883,7 +2078,7 @@ table.data tr:nth-child(even) td { background: var(--bg); }
 
   // ------------------------------------------------------------------ keyboard
   const KEYMAP = {};
-  for (const k in KIND) KEYMAP[KIND[k].key.toLowerCase()] = k;
+  for (const k in KIND) if (KIND[k].key) KEYMAP[KIND[k].key.toLowerCase()] = k;
   document.addEventListener("keydown", (e) => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
     if (e.key === "Escape") {
@@ -1917,12 +2112,15 @@ table.data tr:nth-child(even) td { background: var(--bg); }
 
   // ------------------------------------------------------------------ wiring
   function buildPalette() {
-    const els = $("#palette-elements"), js = $("#palette-junctions");
-    for (const k of ["Se", "Sf", "C", "I", "R", "TF", "GY", "0", "1"]) {
+    const els = $("#palette-elements"), js = $("#palette-junctions"), fs = $("#palette-fields");
+    for (const k of ["Se", "Sf", "C", "I", "R", "TF", "GY", "Cfield", "0", "1"]) {
+      // One button places a C-field; its popover switches it to an I, R or IC field.
+      const field = k === "Cfield";
       const b = h("button", { class: "tool sym", type: "button", "data-place": k, "aria-pressed": "false",
-        title: `${KIND[k].title} (${KIND[k].key}): ${KIND[k].desc}`, onclick: () => (ui.placing === k ? setTool(ui.tool) : startPlacing(k)) },
-      k);
-      (k === "0" || k === "1" ? js : els).append(b);
+        title: field ? "Multiport field (M): a C-, I-, R- or IC-field with a port per bond, such as coupled springs or a rigid body seen at two points"
+          : `${KIND[k].title} (${KIND[k].key}): ${KIND[k].desc}`, onclick: () => (ui.placing === k ? setTool(ui.tool) : startPlacing(k)) },
+      field ? "Field" : k);
+      (k === "0" || k === "1" ? js : field ? fs : els).append(b);
     }
   }
   function init() {
@@ -1942,17 +2140,35 @@ table.data tr:nth-child(even) td { background: var(--bg); }
       afterLoad(false); toast("Cleared the drawing. Undo brings it back.");
     });
     $("#modal").addEventListener("pointerdown", (e) => { if (e.target === $("#modal")) closeModal(); });
+    // The basics are built in; the advanced ones are examples/*.bond files with a
+    // #@title line, embedded in examples.js.
     const exSel = $("#examples");
-    for (const key in EXAMPLES) exSel.append(h("option", { value: key }, EXAMPLES[key][0]));
+    const basics = h("optgroup", { label: "Basics" });
+    for (const key in EXAMPLES) basics.append(h("option", { value: key }, EXAMPLES[key][0]));
+    exSel.append(basics);
+    const advanced = window.BOND_EXAMPLES || [];
+    if (advanced.length) {
+      const group = h("optgroup", { label: "Advanced" });
+      advanced.forEach((ex, i) => group.append(h("option", { value: "file:" + i }, ex.title)));
+      exSel.append(group);
+    }
     exSel.addEventListener("change", () => {
       const key = exSel.value; exSel.value = "";
       if (!key) return;
+      let ex, title;
+      if (key.startsWith("file:")) {
+        const file = advanced[Number(key.slice(5))];
+        const parsed = BE.fromBond(file.text);
+        ex = { graph: parsed.graph, settings: parsed.settings, plots: { hidden: [], extra: [] } };
+        title = file.title;
+      } else {
+        ex = EXAMPLES[key][1](); title = EXAMPLES[key][0];
+      }
       pushHistory();
-      const ex = EXAMPLES[key][1]();
       graph = ex.graph; settings = Object.assign({ tEnd: 10, steps: 1000, params: {}, inputs: {}, init: {} }, ex.settings); plots = ex.plots;
       nextNode = 1; nextBond = 1; fixCounters();
       afterLoad(true);
-      toast(`Loaded “${EXAMPLES[key][0]}”.`);
+      toast(`Loaded “${title}”.`);
     });
     for (const id of ["t-end", "t-steps"]) {
       const inp = $("#" + id);

@@ -1,0 +1,44 @@
+# Two interacting tanks: a pump fills tank 1, which drains into tank 2 through an
+# orifice, and tank 2 drains to the open. Efforts are heads (m) and flows m^3/s;
+# an orifice passes a*sqrt(2*g*h) for a head difference h, either way round.
+# It settles where Q_in = a2*sqrt(2*g*h2) = a12*sqrt(2*g*(h1 - h2)). The tanks start
+# part full: at zero head an orifice's law has an infinite slope, where the
+# simulation can't start.
+
+junction tank1 0: Qin-, T1+
+junction mid 1: O12+
+junction tank2 0: T2+, O2+
+
+element Qin Sf value=Q_in
+element T1 C C=A1
+element O12 R f=Piecewise((a12*sqrt(2*g*e),e>0),(-a12*sqrt(-2*g*e),True))
+element T2 C C=A2
+element O2 R f=Piecewise((a2*sqrt(2*g*e),e>0),(-a2*sqrt(-2*g*e),True))
+element bond3 TF n=1  # plain bond tank1 -> mid
+element bond5 TF n=1  # plain bond mid -> tank2
+connect bond3 tank1 mid
+connect bond5 mid tank2
+
+output h1 = e_T1
+output h2 = e_T2
+output Q_out = f_O2
+
+# --- editor data (comments; bondgraph.py ignores these) ---
+#@title Two tanks with orifices (nonlinear R)
+#@pos Qin 90 240
+#@pos tank1 260 240
+#@pos T1 260 100
+#@pos mid 430 240
+#@pos O12 430 380
+#@pos tank2 600 240
+#@pos T2 600 100
+#@pos O2 770 240
+#@param Q_in=0.02
+#@param A1=1
+#@param A2=0.5
+#@param a12=0.01
+#@param a2=0.008
+#@param g=9.81
+#@init q_T1=0.2
+#@init q_T2=0.05
+#@sim tEnd=300 steps=3000

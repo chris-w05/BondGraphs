@@ -10,6 +10,9 @@
  *   - Se: e = value                  Sf: flow delivered (out of the source) = value
  *   - TF: power in at port 1, out at port 2: e1 = n*e2, f2 = n*f1
  *   - GY: e1 = n*f2, e2 = n*f1
+ *   - Multiport fields (Cfield, Ifield, Rfield, ICfield): ports 1..n, one law per
+ *     port keyed by the variable it sets and the port (e1, q2, ...), in the field's
+ *     own e1.., f1.. (inflow) and q or p per storage port.
  */
 (function (root) {
   "use strict";
@@ -247,8 +250,12 @@
   const STORAGE = { C: true, I: true };
   const TWO_PORT = { TF: true, GY: true };
   const JUNCTION = { "0": true, "1": true };
+  // Multiport fields and the letters their port laws take. In a C, I or IC field the
+  // letter also sets the port's type: e or q a C port (state q), f or p an I port (state p).
+  const FIELD = { Cfield: "eq", Ifield: "fp", Rfield: "ef", ICfield: "eqfp" };
   const isElement = (kind) => !JUNCTION[kind];
-  const maxBonds = (kind) => (JUNCTION[kind] ? Infinity : TWO_PORT[kind] ? 2 : 1);
+  const ported = (kind) => !!(TWO_PORT[kind] || FIELD[kind]); // bonds name their port
+  const maxBonds = (kind) => (JUNCTION[kind] || FIELD[kind] ? Infinity : TWO_PORT[kind] ? 2 : 1);
 
   // Law keys per element kind (same keys as the .bond format). The first is the
   // default: a coefficient (C, I, R, n) or a source value. The others give the
@@ -281,6 +288,35 @@
     return node.kind === "C" ? "q_" + node.name : node.kind === "I" ? "p_" + node.name : null;
   }
 
+  // How names refer to an element's port: X for port 1, X_2 for port 2, ...
+  const portName = (name, port) => (port > 1 ? `${name}_${port}` : name);
+
+  // A field's ports in order, from its bonds: { port, bond, letter, law, type }, with
+  // type "C", "I" or "R"; letter and law are undefined for a port without a law.
+  function fieldPorts(graph, node) {
+    const letters = FIELD[node.kind];
+    return incident(graph, node.id).map((bond) => {
+      const port = portOf(bond, node.id);
+      const key = Object.keys(node.law || {}).find((k) => k.slice(1) === String(port) && letters.includes(k[0]));
+      const letter = key && key[0];
+      const type = node.kind === "Rfield" ? "R" : node.kind === "Ifield" || letter === "f" || letter === "p" ? "I" : "C";
+      return { port, bond, letter, law: key && node.law[key], type };
+    }).sort((a, b) => a.port - b.port);
+  }
+  const fieldStateName = (node, fp) => (fp.type === "C" ? "q_" : "p_") + portName(node.name, fp.port);
+  // The names a field's laws use for its own variables.
+  const fieldOwn = (ports) => ports.flatMap((fp) => ["e" + fp.port, "f" + fp.port].concat(fp.type === "R" ? [] : [(fp.type === "C" ? "q" : "p") + fp.port]));
+  // A law's use of a name like q3 that isn't one of the field's own variables, or "".
+  function strayOwn(ast, own) {
+    for (const id of names(ast).ids) if (/^[efqp]\d+$/.test(id) && !own.includes(id)) return id;
+    return "";
+  }
+
+  // "integral" or "derivative" for a storage element, or a field's port, in a causality result.
+  function storageOf(causality, nodeId, port) {
+    return port ? (causality.ports[nodeId] || {})[port] : causality.storage[nodeId];
+  }
+
   // Port of `node` used by bond b (1 for one-ports and junctions).
   function portOf(b, nodeId) {
     if (b.from === nodeId && b.fromPort) return b.fromPort;
@@ -289,14 +325,14 @@
   }
 
   // Names that refer to bond b: e_X/f_X for element X's port 1, e_X_2/f_X_2 for
-  // port 2, and e_bondN/f_bondN for a bond between two junctions.
+  // port 2 (and so on), and e_bondN/f_bondN for a bond between two junctions.
   function bondAliases(graph, b) {
     const out = [];
     for (const end of ["from", "to"]) {
       const n = graph.nodes.find((x) => x.id === b[end]);
       if (n && isElement(n.kind)) {
         const p = portOf(b, n.id);
-        out.push(p === 2 ? n.name + "_2" : n.name);
+        out.push(portName(n.name, p));
       }
     }
     if (!out.length) out.push("bond" + b.id);
@@ -318,6 +354,12 @@
       const deg = incident(graph, n.id).length;
       if (TWO_PORT[n.kind] && deg === 1) errors.push({ node: n.id, msg: `${n.name} needs a bond on both ports` });
       else if (deg === 0) warnings.push({ node: n.id, msg: `${n.name} isn't bonded to anything, so it's left out` });
+      else if (FIELD[n.kind]) {
+        const ports = fieldPorts(graph, n);
+        if (ports.some((fp, i) => fp.port !== i + 1)) errors.push({ node: n.id, msg: `${n.name}'s ports must be numbered 1 to ${ports.length}` });
+        const bare = ports.find((fp) => fp.law === undefined);
+        if (bare) errors.push({ node: n.id, msg: `${n.name} port ${bare.port} needs a law` });
+      }
     }
     return { errors, warnings };
   }
@@ -338,7 +380,7 @@
     // literal: [bondIndex, valueThatMeansStrokeAtNode]
     const lit = (b, nodeId) => [idx.get(b.id), b.to === nodeId ? 1 : 0];
     const cons = [];   // { node, lits, allowed:Set }
-    const prefs = [];  // { node, lit, want }  want = stroke-at-node wanted (1/0)
+    const prefs = [];  // { node, port?, lit, want }  want = stroke-at-node wanted (1/0); port for a field's
 
     for (const n of graph.nodes) {
       const inc = incident(graph, n.id);
@@ -359,6 +401,10 @@
         case "1": cons.push({ node: n.id, lits, allowed: new Set([lits.length - 1]), why: "exactly one bond may set the flow on a 1-junction" }); break;
         case "TF": if (lits.length === 2) cons.push({ node: n.id, lits, allowed: new Set([1]), why: "a transformer passes effort straight through" }); break;
         case "GY": if (lits.length === 2) cons.push({ node: n.id, lits, allowed: new Set([0, 2]), why: "a gyrator turns effort on one side into flow on the other" }); break;
+        default:
+          if (FIELD[n.kind]) for (const fp of fieldPorts(graph, n)) {
+            if (fp.type !== "R") prefs.push({ node: n.id, port: fp.port, lit: lit(fp.bond, n.id), want: fp.type === "C" ? 0 : 1 });
+          }
       }
     }
 
@@ -371,7 +417,7 @@
     // Visit bonds outward from sources and fixed elements so rules close early.
     const order = [], placed = new Array(nb).fill(false);
     const seeds = graph.nodes.filter((n) => n.kind === "Se" || n.kind === "Sf" || (n.kind === "R" && n.law && n.law.causality))
-      .concat(graph.nodes.filter((n) => STORAGE[n.kind]), graph.nodes);
+      .concat(graph.nodes.filter((n) => STORAGE[n.kind] || FIELD[n.kind]), graph.nodes);
     for (const s of seeds) {
       const queue = [s.id];
       const seenNode = new Set();
@@ -442,10 +488,14 @@
     // Report: stroke end per bond, storage status, violated rules.
     const stroke = {};
     bonds.forEach((b, i) => { stroke[b.id] = best && best[i] === 1 ? b.to : b.from; });
-    const storage = {};
+    // storage: per storage element ("derivative" for a field if any port is); ports: per field port.
+    const storage = {}, ports = {};
     for (const p of prefs) {
       const atNode = best ? (best[p.lit[0]] === p.lit[1] ? 1 : 0) : 0;
-      storage[p.node] = atNode === p.want ? "integral" : "derivative";
+      const status = atNode === p.want ? "integral" : "derivative";
+      if (p.port === undefined) { storage[p.node] = status; continue; }
+      (ports[p.node] = ports[p.node] || {})[p.port] = status;
+      if (storage[p.node] !== "derivative") storage[p.node] = status;
     }
     const conflicts = [];
     if (best) {
@@ -454,7 +504,7 @@
         if (!c.allowed.has(t)) conflicts.push({ node: c.node, msg: `${nodeById.get(c.node).name}: ${c.why}` });
       });
     }
-    return { stroke, storage, conflicts, truncated };
+    return { stroke, storage, ports, conflicts, truncated };
   }
 
   // ---------------------------------------------------------------- simulation
@@ -502,12 +552,17 @@
       symInfo[F(b)] = { name: "f_" + aliases[0], kind: "flow", bond: b.id };
     });
     const states = [];
-    for (const n of nodes) if (STORAGE[n.kind]) {
-      const i = 2 * nB + states.length;
-      const name = stateName(n);
-      states.push({ node: n.id, name, index: i, kind: n.kind });
-      sym.set(name, i);
-      symInfo[i] = { name, kind: "state", node: n.id };
+    const addState = (st) => {
+      st.index = 2 * nB + states.length;
+      states.push(st);
+      sym.set(st.name, st.index);
+      symInfo[st.index] = { name: st.name, kind: "state", node: st.node, port: st.port };
+    };
+    for (const n of nodes) {
+      if (STORAGE[n.kind]) addState({ node: n.id, name: stateName(n), kind: n.kind, bond: incident(graph, n.id)[0] });
+      else if (FIELD[n.kind]) for (const fp of fieldPorts(graph, n)) {
+        if (fp.type !== "R") addState({ node: n.id, port: fp.port, name: fieldStateName(n, fp), kind: fp.type, bond: fp.bond });
+      }
     }
     // An output written integral(expr) is one more state, named after the output.
     for (const o of graph.outputs || []) {
@@ -523,7 +578,28 @@
     // Parameters & inputs referenced by the laws.
     const paramNames = new Set(), inputNames = new Set();
     const lawAst = new Map(), errors = [];
+    const fieldAst = new Map(); // field node id -> [{ fp, ast }]
     for (const n of nodes) {
+      if (FIELD[n.kind]) {
+        const ports = fieldPorts(graph, n), own = fieldOwn(ports), list = [];
+        for (const fp of ports) {
+          if (fp.law === undefined) continue; // reported by validate()
+          try {
+            const ast = parse(fp.law);
+            checkReserved(ast);
+            const stray = strayOwn(ast, own);
+            if (stray) throw new SyntaxError(`${stray} isn't one of its variables`);
+            const nm = names(ast);
+            nm.ids.forEach((id) => { if (id !== "t" && !sym.has(id) && !own.includes(id)) paramNames.add(id); });
+            nm.inputs.forEach((id) => inputNames.add(id));
+            list.push({ fp, ast });
+          } catch (err) {
+            errors.push({ node: n.id, msg: `${n.name} port ${fp.port}: ${err.message}` });
+          }
+        }
+        fieldAst.set(n.id, list);
+        continue;
+      }
       if (!LAW_KEY[n.kind]) continue;
       const src = (n.law && n.law[lawKeyOf(n)]) || "";
       const own = OWN_VARS[n.kind] || [];
@@ -613,6 +689,24 @@
       if (STORAGE[n.kind]) { const i = sym.get(stateName(n)); own.set(n.kind === "C" ? "q" : "p", (c) => c.v[i]); }
       return own;
     }
+    // A field's own e1.., f1.. (inflow) and q or p at each storage port.
+    function fieldOwnVars(n) {
+      const own = new Map();
+      for (const fp of fieldPorts(graph, n)) {
+        const e = E(fp.bond), f = F(fp.bond), s = fp.bond.to === n.id ? 1 : -1;
+        own.set("e" + fp.port, (c) => c.v[e]).set("f" + fp.port, (c) => s * c.v[f]);
+        if (fp.type !== "R") { const i = sym.get(fieldStateName(n, fp)); own.set((fp.type === "C" ? "q" : "p") + fp.port, (c) => c.v[i]); }
+      }
+      return own;
+    }
+    const fieldLaw = new Map(); // field node id -> [{ fp, L }]
+    for (const [id, list] of fieldAst) {
+      const n = graph.nodes.find((x) => x.id === id), own = fieldOwnVars(n);
+      fieldLaw.set(id, list.flatMap(({ fp, ast }) => {
+        try { return [{ fp, L: compile(ast, (name) => own.get(name) || resolve(name), callInput), lhs: own.get(fp.letter + fp.port) }]; }
+        catch (err) { errors.push({ node: id, msg: `${n.name} port ${fp.port}: ${err.message}` }); return []; }
+      }));
+    }
     const law = new Map();
     for (const [id, ast] of lawAst) {
       const n = graph.nodes.find((x) => x.id === id), own = ownVars(n);
@@ -640,6 +734,11 @@
         // signed sum of power-carrying variable, + for bonds leaving the junction
         const terms = inc.map((b) => [summed(b), -into(b)]);
         res.push((c) => { let s = 0; for (const [j, sg] of terms) s += sg * c.v[j]; return s; });
+        continue;
+      }
+      if (FIELD[n.kind]) {
+        // Each port's law: the variable it sets minus its value.
+        for (const { L, lhs } of fieldLaw.get(n.id) || []) res.push((c) => lhs(c) - L(c));
         continue;
       }
       const L = law.get(n.id) || (() => NaN);
@@ -679,10 +778,8 @@
     }
     // State derivatives: dq/dt = f_in for C, dp/dt = e for I.
     const deriv = states.filter((st) => !st.aux).map((st) => {
-      const n = nodes.find((x) => x.id === st.node);
-      const b = incident(graph, n.id)[0];
-      const s = b.to === n.id ? 1 : -1;
-      return n.kind === "C" ? ((j) => (c) => s * c.v[j])(F(b)) : ((j) => (c) => c.v[j])(E(b));
+      const b = st.bond, s = b.to === st.node ? 1 : -1;
+      return st.kind === "C" ? ((j) => (c) => s * c.v[j])(F(b)) : ((j) => (c) => c.v[j])(E(b));
     });
 
     for (const st of states) if (st.aux) {
@@ -719,7 +816,7 @@
     const M = res.length + states.length;
     if (M !== N) return { ok: false, errors: [{ msg: `The equations don't balance (${M} equations, ${N} unknowns). Check that every element is fully bonded.` }], model };
 
-    const integral = new Set(states.filter((s) => !causality || causality.storage[s.node] !== "derivative").map((s) => s.index));
+    const integral = new Set(states.filter((s) => !causality || s.aux || storageOf(causality, s.node, s.port) !== "derivative").map((s) => s.index));
     const x0 = new Float64Array(N);
     for (const st of states) {
       if (!integral.has(st.index)) continue;
@@ -876,7 +973,7 @@
     for (const n of graph.nodes) if (JUNCTION[n.kind]) members.set(n.name, []);
     for (const b of graph.bonds) {
       const A = byId.get(b.from), B = byId.get(b.to);
-      const tok = (n) => (TWO_PORT[n.kind] ? `${n.name}.${portOf(b, n.id)}` : n.name);
+      const tok = (n) => (ported(n.kind) ? `${n.name}.${portOf(b, n.id)}` : n.name);
       if (JUNCTION[A.kind] && JUNCTION[B.kind]) {
         extraEls.push(`element bond${b.id} TF n=1  # plain bond ${A.name} -> ${B.name}`);
         connects.push(`connect bond${b.id} ${A.name} ${B.name}`);
@@ -896,8 +993,12 @@
       if (toks.length || linked.has(name)) lines.push(`junction ${name} ${kind}: ${toks.join(", ")}`);
     }
     lines.push("");
+    // A field's laws in port order.
+    const fieldLawText = (n) => Object.keys(n.law || {}).filter((k) => /^[a-z]\d+$/.test(k)).sort((a, b) => a.slice(1) - b.slice(1))
+      .map((k) => ` ${k}=${String(n.law[k]).replace(/\s+/g, "")}`).join("");
     for (const n of graph.nodes) {
       if (JUNCTION[n.kind] || !incident(graph, n.id).length) continue;
+      if (FIELD[n.kind]) { lines.push(`element ${n.name} ${n.kind}${fieldLawText(n)}`); continue; }
       const key = lawKeyOf(n);
       let line = `element ${n.name} ${n.kind} ${key}=${String((n.law && n.law[key]) || "").replace(/\s+/g, "")}`;
       if (n.kind === "R" && n.law && n.law.causality) line += ` causality=${n.law.causality}`;
@@ -912,7 +1013,7 @@
     for (const n of graph.nodes) {
       if (incident(graph, n.id).length) continue;
       const key = lawKeyOf(n);
-      lines.push(`#@node ${n.name} ${n.kind}` + (key ? ` ${key}=${String((n.law && n.law[key]) || "").replace(/\s+/g, "")}` : ""));
+      lines.push(`#@node ${n.name} ${n.kind}` + (FIELD[n.kind] ? fieldLawText(n) : key ? ` ${key}=${String((n.law && n.law[key]) || "").replace(/\s+/g, "")}` : ""));
     }
     for (const n of graph.nodes) lines.push(`#@pos ${n.name} ${Math.round(n.x)} ${Math.round(n.y)}`);
     if (settings) {
@@ -952,8 +1053,9 @@
         if (juncs.has(m[1])) throw new SyntaxError(`line ${i + 1}: duplicate junction ${m[1]}`);
         const n = { id: nextId++, kind: m[2], name: m[1], x: 0, y: 0, law: {} };
         juncs.set(m[1], n); junctionLines.push([n, m[3], i + 1]);
-      } else if ((m = /^element\s+(\w+)\s+(I|C|R|Se|Sf|TF|GY)(?:\s+(.*))?$/i.exec(line))) {
-        const kind = { i: "I", c: "C", r: "R", se: "Se", sf: "Sf", tf: "TF", gy: "GY" }[m[2].toLowerCase()];
+      } else if ((m = /^element\s+(\w+)\s+(ICfield|Cfield|Ifield|Rfield|I|C|R|Se|Sf|TF|GY)(?:\s+(.*))?$/i.exec(line))) {
+        const kind = { i: "I", c: "C", r: "R", se: "Se", sf: "Sf", tf: "TF", gy: "GY",
+          cfield: "Cfield", ifield: "Ifield", rfield: "Rfield", icfield: "ICfield" }[m[2].toLowerCase()];
         if (els.has(m[1])) throw new SyntaxError(`line ${i + 1}: duplicate element ${m[1]}`);
         const law = {};
         (m[3] || "").split(/\s+/).filter(Boolean).forEach((w) => {
@@ -961,6 +1063,12 @@
           if (eq < 0) throw new SyntaxError(`line ${i + 1}: expected key=value, got '${w}'`);
           law[w.slice(0, eq)] = w.slice(eq + 1);
         });
+        if (FIELD[kind]) {
+          const bad = Object.keys(law).find((k) => !new RegExp(`^[${FIELD[kind]}][1-9]\\d*$`).test(k));
+          if (bad) throw new SyntaxError(`line ${i + 1}: ${m[2]} takes a law per port, like ${[...FIELD[kind]].map((l) => l + "1=").join(", ")} (the variable it sets and the port), not ${bad}=`);
+          els.set(m[1], { id: nextId++, kind, name: m[1], x: 0, y: 0, law });
+          return;
+        }
         const forms = LAW_FORMS[kind], allowed = kind === "R" ? forms.concat("causality") : forms;
         const unknown = Object.keys(law).find((k) => !allowed.includes(k));
         if (unknown) throw new SyntaxError(`line ${i + 1}: ${m[2]} takes ${allowed.map((k) => k + "=").join(", ")} not ${unknown}=`);
@@ -988,12 +1096,13 @@
     }
     for (const [n, list, ln] of junctionLines) {
       list.split(",").map((s) => s.trim()).filter(Boolean).forEach((tok) => {
-        const mm = /^(\w+)(?:\.(1|2))?\s*([+-])?$/.exec(tok);
+        const mm = /^(\w+)(?:\.(\d+))?\s*([+-])?$/.exec(tok);
         if (!mm) throw new SyntaxError(`line ${ln}: bad attachment '${tok}'`);
         const el = els.get(mm[1]);
         if (!el) throw new SyntaxError(`junction ${n.name}: unknown element ${mm[1]}`);
-        const port = TWO_PORT[el.kind] ? Number(mm[2]) : undefined;
-        if (TWO_PORT[el.kind] && !port) throw new SyntaxError(`junction ${n.name}: two-port ${el.name} needs .1 or .2`);
+        const port = ported(el.kind) ? Number(mm[2]) : undefined;
+        if (TWO_PORT[el.kind] && port !== 1 && port !== 2) throw new SyntaxError(`junction ${n.name}: two-port ${el.name} needs .1 or .2`);
+        if (FIELD[el.kind] && !(port >= 1)) throw new SyntaxError(`junction ${n.name}: field ${el.name} needs a port number, like ${el.name}.1`);
         const intoEl = mm[3] !== "-";
         bonds.push(intoEl ? { id: 0, from: n.id, to: el.id, toPort: port } : { id: 0, from: el.id, to: n.id, fromPort: port });
       });
@@ -1025,6 +1134,20 @@
       const law = {};
       kv.forEach((w) => { const eq = w.indexOf("="); if (eq > 0) law[w.slice(0, eq)] = w.slice(eq + 1); });
       (JUNCTION[kind] ? juncs : els).set(name, { id: nextId++, kind, name, x: 0, y: 0, law });
+    }
+    // A field's ports run 1..n, each with one law.
+    for (const el of els.values()) {
+      if (!FIELD[el.kind]) continue;
+      const ports = bonds.filter((b) => b.from === el.id || b.to === el.id).map((b) => portOf(b, el.id)).sort((a, b) => a - b);
+      if (!ports.length) continue; // saved by the editor before it was bonded
+      const gap = ports.findIndex((p, i) => p !== i + 1);
+      if (gap >= 0) throw new SyntaxError(`element ${el.name}: port ${gap + 1} isn't attached; number a field's ports 1, 2, 3, ...`);
+      for (const k of Object.keys(el.law)) if (Number(k.slice(1)) > ports.length) throw new SyntaxError(`element ${el.name}: has a law for port ${k.slice(1)} (${k}=) but ${ports.length} ports`);
+      for (const p of ports) {
+        const keys = [...FIELD[el.kind]].map((l) => l + p).filter((k) => k in el.law);
+        if (keys.length !== 1) throw new SyntaxError(keys.length ? `element ${el.name}: port ${p} has two laws (${keys[0]}= and ${keys[1]}=); give one`
+          : `element ${el.name}: port ${p} needs a law (${[...FIELD[el.kind]].map((l) => l + p + "=").join(" or ")})`);
+      }
     }
     nodes.push(...juncs.values(), ...els.values());
     // Give every bond a unique id, keeping bondN ids where possible.
@@ -1080,7 +1203,8 @@
 
   const api = { parse, names, compile, evalConst, checkReserved, FUNCS, RESERVED, assignCausality, buildModel,
     simulate, validate, toBond, fromBond, autoLayout, bondAliases, portOf, stateName, incident, maxBonds,
-    lawKeyOf, STORAGE, TWO_PORT, JUNCTION, LAW_KEY, LAW_FORMS, OWN_VARS, fmt };
+    lawKeyOf, STORAGE, TWO_PORT, JUNCTION, FIELD, LAW_KEY, LAW_FORMS, OWN_VARS, fmt,
+    ported, portName, fieldPorts, fieldStateName, fieldOwn, strayOwn, storageOf };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.BondEngine = api;
 })(typeof self !== "undefined" ? self : this);

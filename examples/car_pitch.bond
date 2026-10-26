@@ -1,0 +1,16 @@
+# Car bounce and pitch. The body is an I-field seen at the front and rear axles:
+# with the centre of mass a behind the front axle and b ahead of the rear one,
+# v_front = v + a*w and v_rear = v - b*w, so its momenta are p = M f with
+# M = [[m*b^2+J, m*a*b-J], [m*a*b-J, m*a^2+J]] / (a+b)^2.
+junction front 1: F-, Body.1+, kf+, cf+
+junction rear  1: Body.2+, kr+, cr+
+
+element F    Se value=F0*Heaviside(t-0.5)
+element Body Ifield p1=((m*b**2+J)*f1+(m*a*b-J)*f2)/(a+b)**2 p2=((m*a*b-J)*f1+(m*a**2+J)*f2)/(a+b)**2
+element kf   C  C=1/k_f
+element cf   R  R=c_f
+element kr   C  C=1/k_r
+element cr   R  R=c_r
+
+output heave_rate = (b*f_Body + a*f_Body_2)/(a + b)
+output pitch      = integral((f_Body - f_Body_2)/(a + b))

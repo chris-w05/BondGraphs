@@ -1,0 +1,36 @@
+# A parallel-plate electrostatic actuator. A voltage charges the plates through R;
+# the moving plate hangs on a spring. One C-field holds the electrical and the
+# mechanical energy, E = q1^2*(g0 - q2)/(2*eA) + k*q2^2/2: its port 1 is the charge
+# and voltage, its port 2 the plate's deflection and force. Above the pull-in
+# voltage sqrt(8*k*g0^3/(27*eA)) = 0.544 (try V0 = 0.6) the plate snaps shut.
+
+junction circuit 1: V-, R+, Act.1+
+junction plate 1: Act.2+, m+, b+
+
+element V Se value=V0*Heaviside(t)
+element R R R=R
+element Act Cfield e1=q1*(g0-q2)/eA e2=k*q2-q1^2/(2*eA)
+element m I I=m
+element b R R=b
+
+output x = q_Act_2
+output i = f_R
+output V_cap = e_Act
+
+# --- editor data (comments; bondgraph.py ignores these) ---
+#@title Electrostatic actuator (C-field, pull-in)
+#@pos V 100 240
+#@pos circuit 280 240
+#@pos R 280 100
+#@pos Act 480 240
+#@pos plate 680 240
+#@pos m 680 100
+#@pos b 680 380
+#@param V0=0.5
+#@param R=0.1
+#@param g0=1
+#@param eA=1
+#@param k=1
+#@param m=1
+#@param b=0.5
+#@sim tEnd=30 steps=3000

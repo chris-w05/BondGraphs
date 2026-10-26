@@ -267,10 +267,111 @@ test("outputs survive .bond export and import", () => {
   assert.throws(() => E.fromBond("output y = 1\noutput y = 2\n"), /line 2: duplicate output y/);
 });
 
+// Two runs agree on the named variables at a few times.
+function same(a, b, names, tol) {
+  for (const k of [0.25, 0.5, 1]) {
+    const i = Math.round(k * (a.r.X.length - 1));
+    for (const nm of names) near(a.r.X[i][a.r.model.sym.get(nm[0])], b.r.X[i][b.r.model.sym.get(nm[1] || nm[0])], tol, `${nm.join(" vs ")} at ${k}`);
+  }
+}
+
+test("a C-field couples its ports like separate springs would", () => {
+  const params = { m1: "1", m2: "2", k1: "3", k2: "1", k12: "2" }, init = { p_m1: "1" };
+  const springs = G([["v1", "1"], ["v2", "1"], ["m1", "I", { I: "m1" }], ["m2", "I", { I: "m2" }], ["k1", "C", { C: "1/k1" }],
+    ["k2", "C", { C: "1/k2" }], ["J0", "0"], ["k12", "C", { C: "1/k12" }]],
+  ["v1>m1", "v1>k1", "v2>m2", "v2>k2", "v1>J0", "J0>v2", "J0>k12"]);
+  const field = G([["v1", "1"], ["v2", "1"], ["m1", "I", { I: "m1" }], ["m2", "I", { I: "m2" }],
+    ["S", "Cfield", { e1: "k1*q1+k12*(q1-q2)", e2: "k2*q2+k12*(q2-q1)" }]], ["v1>m1", "v2>m2", "v1>S.1", "v2>S.2"]);
+  const a = run(springs, { tEnd: 6, steps: 1200, params, init }), b = run(field, { tEnd: 6, steps: 1200, params, init });
+  assert.deepEqual(b.r.model.states.map((s) => s.name), ["p_m1", "p_m2", "q_S", "q_S_2"]);
+  assert.deepEqual(b.c.ports[5], { 1: "integral", 2: "integral" });
+  same(a, b, [["p_m1"], ["p_m2"], ["q_k1", "q_S"], ["q_k2", "q_S_2"]], 1e-9);
+});
+
+test("an I-field given as p = M f moves like the rigid bar it describes", () => {
+  // Bounce and pitch of a bar on two springs: v_front = vc + a w, v_rear = vc - b w.
+  const params = { m: "2", J: "1", a: "0.6", b: "0.9", k_f: "30", k_r: "40", c_f: "1.5", c_r: "2", F0: "5" };
+  const ends = [["F", "Se", { value: "F0*Heaviside(t-0.2)" }], ["vf", "1"], ["vr", "1"], ["kf", "C", { C: "1/k_f" }],
+    ["cf", "R", { R: "c_f" }], ["kr", "C", { C: "1/k_r" }], ["cr", "R", { R: "c_r" }]];
+  const endBonds = ["F>vf", "vf>kf", "vf>cf", "vr>kr", "vr>cr"];
+  const bar = G(ends.concat([["vc", "1"], ["w", "1"], ["m", "I", { I: "m" }], ["Jb", "I", { I: "J" }], ["nf", "0"], ["nr", "0"],
+    ["TA", "TF", { n: "a" }], ["TB", "TF", { n: "1/b" }]]),
+  endBonds.concat(["vc>m", "w>Jb", "vc>nf", "w>TA.1", "TA.2>nf", "nf>vf", "vc>nr", "nr>vr", "nr>TB.1", "TB.2>w"]));
+  const field = G(ends.concat([["Body", "Ifield", { p1: "((m*b^2+J)*f1+(m*a*b-J)*f2)/(a+b)^2", p2: "((m*a*b-J)*f1+(m*a^2+J)*f2)/(a+b)^2" }]]),
+    endBonds.concat(["vf>Body.1", "vr>Body.2"]));
+  const a = run(bar, { tEnd: 3, steps: 3000, params }), b = run(field, { tEnd: 3, steps: 3000, params });
+  assert.equal(Object.values(b.c.storage).filter((s) => s === "derivative").length, 0);
+  same(a, b, [["q_kf"], ["q_kr"], ["f_kf"], ["e_cr"]], 1e-8);
+});
+
+test("an R-field couples its ports like a resistor network", () => {
+  const params = { C1: "1", C2: "0.5", R1: "2", R2: "3", Rm: "0.5" }, init = { q_C1: "1" };
+  const net = G([["n1", "0"], ["n2", "0"], ["C1", "C", { C: "C1" }], ["C2", "C", { C: "C2" }], ["R1", "R", { R: "R1" }],
+    ["R2", "R", { R: "R2" }], ["J1", "1"], ["Rm", "R", { R: "Rm" }]], ["n1>C1", "n1>R1", "n1>J1", "J1>Rm", "J1>n2", "n2>C2", "n2>R2"]);
+  const field = G([["n1", "0"], ["n2", "0"], ["C1", "C", { C: "C1" }], ["C2", "C", { C: "C2" }],
+    ["G", "Rfield", { f1: "(1/R1+1/Rm)*e1-e2/Rm", f2: "-e1/Rm+(1/R2+1/Rm)*e2" }]], ["n1>C1", "n1>G.1", "n2>C2", "n2>G.2"]);
+  same(run(net, { tEnd: 3, steps: 600, params, init }), run(field, { tEnd: 3, steps: 600, params, init }), [["q_C1"], ["q_C2"]], 1e-9);
+});
+
+test("a field port in derivative causality follows its source", () => {
+  // A flow source drives port 1, so that port's momentum is m1 times the source's flow.
+  const g = G([["S", "Sf", { value: "sin(t)" }], ["a", "1"], ["V", "Se", { value: "1" }], ["b", "1"],
+    ["X", "Ifield", { p1: "m1*f1", f2: "p2/m2" }]], ["S>a", "a>X.1", "V>b", "b>X.2"]);
+  const { c, r, val } = run(g, { tEnd: 2, steps: 2000, params: { m1: "3", m2: "2" } });
+  assert.deepEqual(c.ports[5], { 1: "derivative", 2: "integral" });
+  assert.equal(c.storage[5], "derivative");
+  near(val("p_X"), 3 * Math.sin(2), 1e-6, "p1 = m1 f1");
+  near(val("p_X_2"), 2, 1e-6, "p2 integrates the unit effort");
+  assert.ok(!r.partial);
+});
+
+test("fields survive .bond export and import, and bad ones are reported", () => {
+  const g = G([["v1", "1"], ["v2", "1"], ["m1", "I", { I: "m1" }], ["m2", "I", { I: "m2" }],
+    ["S", "ICfield", { e1: "k*q1 + a*p2", f2: "p2/m+a*q1" }], ["lonely", "Rfield", { e1: "R*f1" }]], ["v1>m1", "v2>m2", "v1>S.1", "S.2>v2"]);
+  const text = E.toBond(g);
+  assert.match(text, /^element S ICfield e1=k\*q1\+a\*p2 f2=p2\/m\+a\*q1$/m);
+  assert.match(text, /^junction v1 1: m1\+, S\.1\+$/m);
+  assert.match(text, /^junction v2 1: m2\+, S\.2-$/m);
+  assert.match(text, /^#@node lonely Rfield e1=R\*f1$/m);
+  const back = E.fromBond(text).graph;
+  const S = back.nodes.find((n) => n.name === "S");
+  assert.deepEqual(S.law, { e1: "k*q1+a*p2", f2: "p2/m+a*q1" });
+  assert.deepEqual(E.fieldPorts(back, S).map((fp) => [fp.port, fp.type]), [[1, "C"], [2, "I"]]);
+  const bad = (law) => () => E.fromBond(`junction a 1: F-, S.1+, S.2+\nelement F Se value=1\nelement S Cfield ${law}\n`);
+  assert.throws(bad("e1=q1 f2=q2"), /Cfield takes a law per port, like e1=, q1=/);
+  assert.throws(bad("e1=q1"), /port 2 needs a law \(e2= or q2=\)/);
+  assert.throws(bad("e1=q1 q1=e1 e2=q2"), /port 1 has two laws/);
+  assert.throws(() => E.fromBond("junction a 1: F-, S.1+, S.3+\nelement F Se value=1\nelement S Rfield e1=f1 e2=f2 e3=f3\n"), /port 2 isn't attached/);
+  // A law that reaches for another port's variable is caught before simulating.
+  const stray = G([["v", "1"], ["m", "I", { I: "1" }], ["S", "Cfield", { e1: "q2" }]], ["v>m", "v>S.1"]);
+  assert.match(E.buildModel(stray, {}).errors[0].msg, /S port 1: q2 isn't one of its variables/);
+});
+
 test("the equations window's copy of bondgraph.py is up to date", () => {
   const embed = require("./embed-python.js");
   assert.ok(fs.existsSync(embed.OUT) && fs.readFileSync(embed.OUT, "utf8") === embed.render(),
     "ui/bondgraph-py.js is stale. Run: node ui/embed-python.js");
+});
+
+test("the editor's copy of the examples is up to date", () => {
+  const embed = require("./embed-examples.js");
+  assert.ok(fs.existsSync(embed.OUT) && fs.readFileSync(embed.OUT, "utf8") === embed.render(),
+    "ui/examples.js is stale. Run: node ui/embed-examples.js");
+});
+
+test("every advanced example imports and simulates to the end", () => {
+  const dir = path.join(__dirname, "..", "examples");
+  const titled = fs.readdirSync(dir).filter((f) => f.endsWith(".bond")).map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")])
+    .filter(([, text]) => /^#@title /m.test(text));
+  assert.ok(titled.length >= 6);
+  for (const [file, text] of titled) {
+    const { graph, settings } = E.fromBond(text);
+    const c = E.assignCausality(graph);
+    assert.equal(c.conflicts.length, 0, file);
+    const r = E.simulate(graph, settings, c);
+    assert.ok(r.ok && !r.partial, `${file}: ${JSON.stringify(r.errors)}`);
+    assert.ok(r.model.outputs.every((o) => !o.error), file);
+  }
 });
 
 test("examples/dc_motor.bond imports and simulates", () => {

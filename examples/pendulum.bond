@@ -1,0 +1,29 @@
+# A pendulum: its inertia m*L^2 about the pivot, gravity as a nonlinear spring
+# whose torque is m*g*L*sin(theta), and viscous friction at the pivot. The
+# spring's displacement is the angle. Linearizing about theta = 0 gives a stable
+# oscillator; about theta = pi the cos(theta) term flips sign and it's unstable.
+
+junction pivot 1: T-, J+, grav+, fric+
+
+element T Se value=tau(t)
+element J I I=m*L^2
+element grav C e=m*g*L*sin(q)
+element fric R R=b
+
+output theta = q_grav
+output omega = f_J
+
+# --- editor data (comments; bondgraph.py ignores these) ---
+#@title Pendulum (nonlinear C; linearize it)
+#@pos T 100 240
+#@pos pivot 300 240
+#@pos J 300 100
+#@pos grav 480 240
+#@pos fric 300 380
+#@param m=1
+#@param g=9.81
+#@param L=1
+#@param b=0.1
+#@input tau=0
+#@init q_grav=2.5
+#@sim tEnd=20 steps=2000

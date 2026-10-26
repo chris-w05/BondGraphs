@@ -1,0 +1,55 @@
+# A quarter car: the body (m_b) on the suspension spring and damper, the wheel
+# (m_w) on the tire, driven by the road's vertical velocity v_r(t), here a 10 cm
+# triangular bump at speed. Past d = 5 cm of travel either way, a bump stop adds
+# stiffness k_b. Motion is measured from static equilibrium, so gravity drops out.
+
+junction body 1: mb+
+junction n_s 0: 
+junction susp 1: ks+, cs+
+junction wheel 1: mw+
+junction n_t 0: road-, tire+
+
+element mb I I=m_b
+element ks C e=k_s*q+Piecewise((k_b*(q-d),q>d),(k_b*(q+d),q<-d),(0,True))
+element cs R R=c_s
+element mw I I=m_w
+element tire C C=1/k_t
+element road Sf value=v_r(t)
+element bond3 TF n=1  # plain bond n_t -> wheel
+element bond5 TF n=1  # plain bond wheel -> n_s
+element bond6 TF n=1  # plain bond n_s -> susp
+element bond7 TF n=1  # plain bond n_s -> body
+connect bond3 n_t wheel
+connect bond5 wheel n_s
+connect bond6 n_s susp
+connect bond7 n_s body
+
+output travel = q_ks
+output tire_force = e_tire
+output body_accel = e_mb/m_b
+output body_height = integral(f_mb)
+
+# --- editor data (comments; bondgraph.py ignores these) ---
+#@title Quarter car over a bump (piecewise bump stop)
+#@pos body 450 80
+#@pos mb 650 80
+#@pos n_s 450 220
+#@pos susp 650 220
+#@pos ks 820 160
+#@pos cs 820 280
+#@pos wheel 450 360
+#@pos mw 650 360
+#@pos n_t 450 500
+#@pos tire 650 500
+#@pos road 250 500
+#@param m_b=300
+#@param m_w=40
+#@param k_s=20000
+#@param c_s=1500
+#@param k_t=200000
+#@param k_b=200000
+#@param d=0.05
+#@param H=0.1
+#@param T=0.1
+#@input v_r=H/T*(Heaviside(t-1)-2*Heaviside(t-1-T)+Heaviside(t-1-2*T))
+#@sim tEnd=3 steps=3000

@@ -1,0 +1,39 @@
+# A steel ball held under an electromagnet. The magnet is an IC-field: port 1 is
+# the coil, storing flux linkage p1 with current p1*gap/K, and port 2 the gap,
+# where it pulls with force p1^2/(2*K). Open loop this is unstable; the voltage
+# source closes a PD loop on the gap, V = (the holding voltage at r) +
+# k_p*(gap - r) + k_d*(gap rate), and r(t) steps the gap from 10 to 12 mm.
+# Linearize it (about gap r, flux sqrt(2*K*m*g)) to see the loop's poles.
+
+junction coil 1: V-, Rc+, Mag.1+
+junction gap 1: Mag.2+, ball+, W-
+
+element V Se value=R_c*sqrt(2*K*m*g)*r(t)/K+k_p*(q_Mag_2-r(t))+k_d*f_ball
+element Rc R R=R_c
+element Mag ICfield f1=p1*q2/K e2=p1^2/(2*K)
+element ball I I=m
+element W Se value=m*g
+
+output gap_mm = 1000*q_Mag_2
+output current = f_Rc
+output voltage = e_V
+
+# --- editor data (comments; bondgraph.py ignores these) ---
+#@title Magnetic levitation with PD control (IC-field)
+#@pos V 100 240
+#@pos coil 280 240
+#@pos Rc 280 100
+#@pos Mag 470 240
+#@pos gap 660 240
+#@pos ball 660 100
+#@pos W 840 240
+#@param m=0.05
+#@param g=9.81
+#@param K=1e-3
+#@param R_c=10
+#@param k_p=390
+#@param k_d=5.1
+#@input r=0.01+0.002*Heaviside(t-0.3)
+#@init q_Mag_2=0.01
+#@init p_Mag=sqrt(2*K*m*g)
+#@sim tEnd=1 steps=2000

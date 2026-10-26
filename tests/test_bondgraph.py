@@ -243,6 +243,196 @@ class BondGraphTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, why):
                 bg.derive(m, bg.causality(m), outputs={})
 
+    TWO_MASSES = "junction v1 1: F-, m1+, S.1+\njunction v2 1: m2+, S.2+\nelement F Se value=F(t)\nelement m1 I I=m1\nelement m2 I I=m2\n"
+
+    def field_equations(self, text):
+        m = bg.parse_text(text)
+        states, dots, _, solution = bg.derive(m, bg.causality(m))
+        self.assertIsNotNone(solution)
+        return dict(zip(map(str, states), dots))
+
+    def test_c_field_couples_its_ports(self):
+        eqs = self.field_equations(self.TWO_MASSES + "element S Cfield e1=k1*q1+k12*(q1-q2) e2=k2*q2+k12*(q2-q1)\n")
+        self.assertEqual(list(eqs), ["p_m1", "p_m2", "q_S", "q_S_2"])
+        self.assertSame(eqs["p_m1"], "F(t) - k1*q_S - k12*(q_S - q_S_2)")
+        self.assertSame(eqs["p_m2"], "-k2*q_S_2 - k12*(q_S_2 - q_S)")
+        self.assertSame(eqs["q_S_2"], "p_m2/m2")
+        # Written the other way round, q = C e, the field is inverted to the same equations
+        eqs = self.field_equations(self.TWO_MASSES + "element S Cfield q1=(k2*e1+k12*(e1+e2))/(k1*k2+k12*(k1+k2)) "
+                                   "q2=(k1*e2+k12*(e1+e2))/(k1*k2+k12*(k1+k2))\n")
+        self.assertSame(eqs["p_m1"], "F(t) - k1*q_S - k12*(q_S - q_S_2)")
+
+    def test_i_field_given_as_p_of_f_is_inverted(self):
+        eqs = self.field_equations("junction a 1: F-, B.1+, k1+\njunction b 1: B.2+, k2+\nelement F Se value=F(t)\n"
+                                   "element B Ifield p1=M11*f1+M12*f2 p2=M12*f1+M22*f2\nelement k1 C C=1/k1\nelement k2 C C=1/k2\n")
+        M = sp.Matrix(sp.symbols("M11 M12 M12 M22")).reshape(2, 2)
+        v = M.inv() * sp.Matrix(sp.symbols("p_B p_B_2"))
+        self.assertEqual(sp.simplify(eqs["q_k1"] - v[0]), 0)
+        self.assertEqual(sp.simplify(eqs["q_k2"] - v[1]), 0)
+        self.assertSame(eqs["p_B"], "F(t) - k1*q_k1")
+
+    def test_r_field_in_either_form(self):
+        caps = "junction n1 0: C1+, G.1+\njunction n2 0: C2+, G.2+\nelement C1 C C=C1\nelement C2 C C=C2\n"
+        eqs = self.field_equations(caps + "element G Rfield f1=G11*e1+G12*e2 f2=G12*e1+G22*e2\n")
+        self.assertSame(eqs["q_C1"], "-(G11*q_C1/C1 + G12*q_C2/C2)")
+        eqs = self.field_equations(caps + "element G Rfield e1=R1*f1+Rm*f2 e2=Rm*f1+R2*f2\n")
+        flows = sp.Matrix([[sp.Symbol("R1"), sp.Symbol("Rm")], [sp.Symbol("Rm"), sp.Symbol("R2")]]).inv() * sp.Matrix(sp.sympify(["q_C1/C1", "q_C2/C2"]))
+        self.assertEqual(sp.simplify(eqs["q_C1"] + flows[0]), 0)
+
+    def test_ic_field_ports_take_their_type_from_their_laws(self):
+        m = bg.parse_text("junction j1 1: S1-, X.1+\njunction j2 1: S2-, X.2+\nelement S1 Sf value=u1(t)\nelement S2 Se value=u2(t)\n"
+                          "element X ICfield e1=k*q1+a*p2 f2=p2/m+a*q1\noutput e = e_X\n")
+        outputs = {}
+        states, dots, _, _ = bg.derive(m, bg.causality(m), outputs=outputs)
+        self.assertEqual([str(s) for s in states], ["q_X", "p_X_2"])
+        self.assertEqual([str(d) for d in dots], ["u1(t)", "u2(t)"])
+        self.assertSame(outputs["e"], "k*q_X + a*p_X_2")
+
+    def test_editor_causality_covers_field_ports(self):
+        m = bg.parse_text(self.TWO_MASSES + "element S Cfield e1=k*q1 e2=k*q2\n")
+        states, _, _, _ = bg.derive(m, bg.storage_causality(m, {"S.2": False}))
+        self.assertEqual([str(s) for s in states], ["p_m1", "p_m2", "q_S"])
+
+    def test_storage_a_source_forces_follows_it(self):
+        # Port 1 of the field and the inductor are fixed by flow sources: each is
+        # solved for, and reported as following, rather than leaving the rest unsolved.
+        m = bg.parse_text("junction a 1: S-, X.1+\njunction b 1: V-, X.2+\nelement S Sf value=sin(t)\nelement V Se value=1\n"
+                          "element X Ifield p1=m1*f1 f2=p2/m2\n")
+        reduction = {}
+        states, dots, _, solution = bg.derive(m, bg.causality(m), reduction=reduction)
+        self.assertIsNotNone(solution)
+        self.assertEqual((list(map(str, states)), dots), (["p_X_2"], [1]))
+        self.assertEqual([(str(x), str(y)) for x, y in reduction["dependent"]], [("p_X", "m1*sin(t)")])
+        m = bg.parse_text("junction j 1: S-, L+, R1+\nelement S Sf value=u(t)\nelement L I I=L\nelement R1 R R=R\noutput v = e_R1\n")
+        outputs = {}
+        bg.derive(m, bg.causality(m), outputs=outputs)
+        self.assertSame(outputs["v"], "R*u(t)")
+        self.assertEqual(bg.latex_report(m, bg.causality(m))["dependent"], [r"p_{L} = L u{\left(t \right)}"])
+
+    HARD_SPRING = ("junction v 1: F-, m+, k+, b+\nelement F Se value=F(t)\nelement m I I=m\nelement k C e=k*q+k3*q**3\n"
+                   "element b R R=b\noutput x = q_k\noutput v = f_m\n")
+
+    def test_power_variables_replace_the_states(self):
+        m = bg.parse(str(Path(__file__).parents[1] / "examples" / "dc_motor.bond"))
+        v = bg.view(m, bg.causality(m), "power")
+        self.assertEqual([str(x) for x in v["states"]], ["f_La", "f_J"])
+        u = v["columns"][0]["slot"]
+        self.assertSame(v["dots"][0].xreplace({u: sp.Symbol("V")}), "(V - R_a*f_La - K_t*f_J)/L_a")
+        self.assertSame(v["dots"][1], "(K_t*f_La - b*f_J)/J")
+        # After a reduction, storage that follows the states does so in power variables too
+        m = bg.parse(str(Path(__file__).parents[1] / "examples" / "fluid_piston.bond"))
+        v = bg.view(m, bg.causality(m), "power")
+        self.assertEqual([(str(x), str(y)) for x, y in v["dependent"]], [("f_m", "A*f_If")])
+        self.assertSame(v["dots"][0], "A*k*f_If")
+
+    def test_lagrange_variables(self):
+        # Displacements q stay and each I's flow replaces its p: m x'' = F - b x' - k x - k3 x^3,
+        # with no storage law inverted.
+        m = bg.parse_text(self.HARD_SPRING)
+        c = bg.causality(m)
+        v = bg.view(m, c, "lagrange")
+        self.assertEqual(([str(x) for x in v["states"]], v["note"], v["hint"]), (["f_m", "q_k"], "", ""))
+        inputs = {col["slot"]: col["value"] for col in v["columns"]}
+        self.assertSame(v["dots"][0].xreplace(inputs), "(F(t) - b*f_m - k*q_k - k3*q_k**3)/m")
+        self.assertEqual(str(v["dots"][1]), "f_m")
+        self.assertEqual([(name, str(y)) for name, y in v["outputs"]], [("x", "q_k"), ("v", "f_m")])
+        out = bg.latex_report(m, c, "lagrange")
+        self.assertIn(r"\dot{f}_{m} &= ", out["separate"])
+        # Linearized: dδf_m/dt = (δF - b δf_m - (k + 3 k3 q_k‾^2) δq_k)/m
+        v = bg.view(m, c, "lagrange", linearize=True)
+        self.assertEqual([str(x) for x in v["states"]], ["δf_m", "δq_k"])
+        d = {sp.Symbol("δF"): sp.Symbol("dF"), sp.Symbol("δf_m"): sp.Symbol("df"), sp.Symbol("δq_k"): sp.Symbol("dq"), sp.Symbol("q_k‾"): sp.Symbol("qb")}
+        self.assertSame(v["dots"][0].xreplace(d), "(dF - b*df - (k + 3*k3*qb**2)*dq)/m")
+
+    def test_linear_approximation(self):
+        m = bg.parse_text(self.HARD_SPRING)
+        c = bg.causality(m)
+        self.assertTrue(bg.view(m, c)["nonlinear"])
+        v = bg.view(m, c, linearize=True)
+        self.assertEqual([str(x) for x in v["states"]], ["δp_m", "δq_k"])
+        bar = {sp.Symbol("q_k‾"): sp.Symbol("qb")}
+        self.assertSame(v["dots"][0].xreplace(bar).xreplace({sp.Symbol("δF"): sp.Symbol("dF"), sp.Symbol("δp_m"): sp.Symbol("dp"), sp.Symbol("δq_k"): sp.Symbol("dq")}),
+                        "dF - b*dp/m - (k + 3*k3*qb**2)*dq")
+        self.assertEqual([str(f) for f in v["operating"]], ["F‾ - b*p_m‾/m - k*q_k‾ - k3*q_k‾**3", "p_m‾/m"])
+        self.assertEqual([name for name, _ in v["outputs"]], ["δx", "δv"])
+        # In power variables: dδe_k/dt = (k + 3 k3 q‾^2) δf_m
+        Q = sp.Symbol("q_k‾")
+        v = bg.view(m, c, "power", linearize=True)
+        self.assertSame(v["dots"][1].xreplace({sp.Symbol("δf_m"): sp.Symbol("df"), Q: sp.Symbol("qb")}), "(k + 3*k3*qb**2)*df")
+        out = bg.latex_report(m, c, linearize=True)
+        self.assertIn(r"\delta \dot{p}_{m} &= ", out["separate"])
+        self.assertIn(r"0 &= \bar{F} - ", out["operating"])
+
+    def test_views_of_a_linear_model(self):
+        m = bg.parse(str(Path(__file__).parents[1] / "examples" / "dc_motor.bond"))
+        c = bg.causality(m)
+        v = bg.view(m, c, linearize=True)
+        self.assertFalse(v["nonlinear"] or v["linearized"])  # a linear model is its own approximation
+        self.assertEqual(bg.latex_report(m, c), bg.latex_report(m, c, "energy", True))
+
+    def test_power_variables_of_a_nonlinear_law_take_its_inverse(self):
+        m = bg.parse_text(self.HARD_SPRING)
+        v = bg.view(m, bg.causality(m), "power")
+        self.assertEqual([str(x) for x in v["states"]], ["f_m", "e_k"])
+        self.assertIn("linear approximation is simpler", v["hint"])
+
+    def test_power_variables_that_depend_on_an_input(self):
+        # An electrostatic actuator driven by a voltage source: port 1 of the C-field
+        # is in derivative causality, so its charge q1 = Ae*u/(l - q2) follows the
+        # source, and port 2's force e2 = -q1^2/(2*Ae) depends on the input too.
+        m = bg.parse_text("junction J1 1: CF1.2+, Se1+, I1-\njunction bond5 1: F-, CF1.1+\nelement F Se value=F0*Heaviside(t)\n"
+                          "element CF1 Cfield e1=q1*(l-q2)/(Ae) e2=-q1^2/(2*Ae)\nelement I1 I I=I_I1\nelement Se1 Se value=1\n")
+        c = bg.causality(m)
+        v = bg.view(m, c, "power")
+        self.assertEqual((v["note"], [str(x) for x in v["states"]]), ("", ["e_CF1_2", "f_I1"]))
+        self.assertIn("rate of change", v["hint"])
+        # de2/dt = de2/dq2 * dq2/dt + de2/du * du/dt, written with the inverse that keeps
+        # the gap l - q2 positive. Check it at a point, from q2 and u.
+        l, Ae, q, u, du, f = 0.8, 0.6, 0.1, 0.3, 0.7, 0.2
+        e2 = -Ae * u**2 / (2 * (l - q)**2)
+        expected = -Ae * u**2 / (l - q)**3 * f - Ae * u / (l - q)**2 * du
+        slot, rate = (next(col["slot"] for col in v["columns"] if col["name"] == name) for name in ("u_F", "u_F˙"))
+        point = {sp.Symbol("l"): l, sp.Symbol("Ae"): Ae, slot: u, rate: du, sp.Symbol("e_CF1_2"): e2, sp.Symbol("f_I1"): f}
+        self.assertAlmostEqual(complex(v["dots"][0].xreplace(point).evalf()).real, expected)
+        out = bg.latex_report(m, c, "power")
+        self.assertIn(r"\delta\left(t\right)", out["separate"])  # the step input's rate, an impulse
+        # Linearized, the input's rate is one more input: dδe2/dt = ... - Ae*u‾/(l - q2‾)^2 * δu_F˙
+        v = bg.view(m, c, "power", linearize=True)
+        self.assertEqual(v["note"], "")
+        self.assertIn(sp.Symbol("δu_F˙"), v["dots"][0].free_symbols)
+        self.assertEqual(bg.tex_name("δu_F˙"), r"\delta \dot{u}_{F}")
+
+    def test_advanced_examples_solve(self):
+        for path in sorted((Path(__file__).parents[1] / "examples").glob("*.bond")):
+            if "#@title" not in path.read_text():
+                continue
+            with self.subTest(path.name):
+                m = bg.parse(str(path))
+                c = bg.causality(m)
+                outputs = {}
+                _, _, _, solution = bg.derive(m, c, outputs=outputs)
+                self.assertIsNotNone(solution)
+                self.assertEqual(bg.unsolved(m, bg.derive(m, c)[0], outputs), [])
+                self.assertTrue(bg.view(m, c, "lagrange", linearize=True)["note"] == "")
+
+    def test_names_of_deviations_and_operating_points(self):
+        self.assertEqual(bg.tex_name("δq_C1", dot=True), r"\delta \dot{q}_{\mathrm{C1}}")
+        self.assertEqual(bg.tex_name("omega‾"), r"\bar{\omega}")
+
+    def test_field_mistakes_are_rejected(self):
+        base = self.TWO_MASSES
+        for law, why in (("e1=q1 f2=q2", r"Cfield takes a law per port, like e1=, q1="),
+                         ("e1=q1", r"port 2 needs a law \(e2= or q2=\)"),
+                         ("e1=q1 e2=q2 e3=q1", "has a law for port 3"),
+                         ("e1=q1 q1=e1 e2=q2", "port 1 has two laws"),
+                         ("e1=q1 e2=p2", "uses p2, which isn't one of its variables")):
+            with self.assertRaisesRegex(ValueError, why):
+                bg.parse_text(base + f"element S Cfield {law}\n")
+        with self.assertRaisesRegex(ValueError, "port 2 isn't attached"):
+            bg.parse_text("junction a 1: F-, S.1+, S.3+\nelement F Se value=1\nelement S Rfield e1=f1 e2=f2 e3=f3\n")
+        with self.assertRaisesRegex(ValueError, "needs a port number, like S.1"):
+            bg.parse_text("junction a 1: F-, S+\nelement F Se value=1\nelement S Rfield e1=f1\n")
+
 
 if __name__ == "__main__":
     unittest.main()

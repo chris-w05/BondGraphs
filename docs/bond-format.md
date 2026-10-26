@@ -10,6 +10,9 @@ python3 bondgraph.py model.bond --show-equations # also print every junction/ele
 python3 bondgraph.py model.bond --json           # machine-readable output
 python3 bondgraph.py model.bond --latex          # state equations as LaTeX, one per state
 python3 bondgraph.py model.bond --latex=matrix   # ... or as x' = A x + B u, y = C x + D u
+python3 bondgraph.py model.bond --variables power      # states as power variables (efforts and flows)
+python3 bondgraph.py model.bond --variables lagrange   # states as displacements q and flows f
+python3 bondgraph.py model.bond --linearize            # a nonlinear model's linear approximation
 ```
 
 Contents:
@@ -17,7 +20,7 @@ Contents:
 1. [File layout](#1-file-layout)
 2. [Junctions](#2-junctions)
 3. [Elements](#3-elements)
-4. [Two-ports: TF and GY](#4-two-ports-tf-and-gy)
+4. [Two-ports and multiport fields](#4-two-ports-and-multiport-fields)
 5. [Expressions](#5-expressions)
 6. [Modulated elements](#6-modulated-elements)
 7. [Piecewise and nonlinear laws](#7-piecewise-and-nonlinear-laws)
@@ -118,6 +121,9 @@ contain spaces** (`R=R0*(1+a*q_C1)`, not `R = R0 * (1 + a*q_C1)`).
 | `TF` | `e1 = n*e2`, `f2 = n*f1` | `n=` | `n_<name>` | none |
 | `GY` | `e1 = n*f2`, `e2 = n*f1` | `n=` | `n_<name>` | none |
 
+Multiport fields (`Cfield`, `Ifield`, `Rfield`, `ICfield`) have any number of
+ports and a law for each; see [Multiport fields](#multiport-fields).
+
 `f_in` is the flow into the element and `f_out` the flow out of it. With the
 usual signs (`+` on `I`, `C`, `R`; `-` on sources) these are just the bond's
 `f_X`. For two-ports, see [Sign conventions](#sign-conventions).
@@ -173,7 +179,7 @@ other causality, the tool solves the law for the variable it needs (see
 `f` over `f_<name>` inside an element's own law: `f_<name>` follows the bond's
 half-arrow, so flipping the arrow would flip its sign.
 
-## 4. Two-ports: TF and GY
+## 4. Two-ports and multiport fields
 
 A transformer or gyrator has ports `.1` and `.2` and needs **both** attached.
 You can attach them in either of two ways, but not both for the same element.
@@ -214,6 +220,62 @@ For the motor, `G GY n=K_t` gives back-EMF `e1 = K_t*ω` and torque
 
 In the variables, port 1 of element `G` is `e_G`/`f_G` and port 2 is
 `e_G_2`/`f_G_2`.
+
+### Multiport fields
+
+A field is a storage or resistive element with any number of ports and coupled
+laws: springs that share a load, a rigid body seen at several points, a resistor
+network seen at its terminals.
+
+| Kind | What it is | Each port's law | State per port |
+|------|------------|-----------------|----------------|
+| `Cfield` | coupled capacitances | `e<k>=φ(q1, q2, ...)` or `q<k>=φ(e1, ...)` | `q` |
+| `Ifield` | coupled inertances | `f<k>=φ(p1, p2, ...)` or `p<k>=φ(f1, ...)` | `p` |
+| `Rfield` | coupled resistances | `e<k>=φ(f1, f2, ...)` or `f<k>=φ(e1, ...)` | none |
+| `ICfield` | mixed storage | an `e`/`q` law makes port `k` a C port, an `f`/`p` law an I port | `q` or `p` |
+
+Attach the ports by number like a two-port's, `S.1`, `S.2`, `S.3`, ..., numbered
+from 1 without gaps. Signs work as for any element: `+` points power into the
+field. Each port has exactly one law, keyed by the variable it sets and the port.
+Inside the laws, the field's own variables are `e1, e2, ...` (the effort at
+each port), `f1, f2, ...` (the flow into each port) and `q1, ...` or `p1, ...`
+(each storage port's state). Elsewhere they're named like a two-port's: port 1 of
+`S` is `e_S`, `f_S`, `q_S`, and port 2 is `e_S_2`, `f_S_2`, `q_S_2`.
+
+```text
+# Two masses on a C-field: each held to ground, and coupled to each other
+junction v1 1: F-, m1+, S.1+
+junction v2 1: m2+, S.2+
+element F  Se value=F(t)
+element m1 I I=m1
+element m2 I I=m2
+element S  Cfield e1=k1*q1+k12*(q1-q2) e2=k2*q2+k12*(q2-q1)
+```
+
+```text
+States: p_m1, p_m2, q_S, q_S_2
+
+State equations:
+  d(p_m1)/dt = -k1*q_S - k12*q_S + k12*q_S_2 + F(t)
+  d(p_m2)/dt = k12*q_S - k12*q_S_2 - k2*q_S_2
+  d(q_S)/dt = p_m1/m1
+  d(q_S_2)/dt = p_m2/m2
+```
+
+A linear field is written a row at a time, such as an inertia matrix
+`p1=M11*f1+M12*f2 p2=M12*f1+M22*f2`. As with a one-port, the law can be written
+either way round: the tool solves for whatever the causality needs, so
+`p = M f` in integral causality is inverted for the flows.
+[`car_pitch.bond`](../examples/car_pitch.bond) models a car's bounce and pitch
+with its body as an I-field. When a field stores energy, its laws should be the
+derivatives of one energy function, which makes `K`, `C` or `M` symmetric. The
+tool doesn't check that.
+
+Each storage port prefers integral causality on its own, so one port can end up
+in derivative causality while the others are states. A port that a source fixes
+is solved for like any [forced storage](#reducing-derivative-causality-away), but
+fields aren't reflected or combined the way one-port `C`s and `I`s are. The
+editor simulates them either way.
 
 ## 5. Expressions
 
@@ -359,8 +421,8 @@ The tool assigns causality automatically.
 - **Two-ports:** a `TF` passes causality straight through. A `GY` flips it, so
   both of its ports impose the same kind of variable.
 - **Storage:** among all valid assignments, the one with the most `I` and `C`
-  elements in **integral causality** wins. `I` imposes flow and `C` imposes
-  effort.
+  elements (and storage ports of fields) in **integral causality** wins. `I`
+  imposes flow and `C` imposes effort.
 - **Resistors:** an `R` takes whatever the rest of the graph leaves it, unless
   you fix it with `causality=effort` or `causality=flow`. Use this when its
   law can only be solved one way. Writing the law as `e=` or `f=` doesn't fix
@@ -411,11 +473,12 @@ A side is reflected only if it holds nothing but `R`, `C` and `I` elements, and
 only if no law reads `t` or another element's variables (no modulation, no
 `causality=`). Derivative causality that a source forces, such as an `Sf` on a
 1-junction with an `I`, can't be reduced away. That storage just follows the
-source.
+source: its state is solved for from its law and listed under **Storage in
+derivative causality**, `p_L = L*u(t)` for the inductor.
 
 The search is exhaustive, so models are limited to **22 ports** in total
-(each one-port counts 1, each TF/GY counts 2). For larger systems, split the
-model.
+(each one-port counts 1, each TF/GY counts 2, each field one per port). For
+larger systems, split the model.
 
 ## 9. Outputs
 
@@ -497,9 +560,9 @@ State equations:
 - **States:** the state vector, built from integral-causality storage only.
 - **State equations:** derivatives written in terms of states, inputs and
   parameters.
-- **Storage in derivative causality (follows the states):** after a
-  reduction, each storage element that isn't a state, written in terms of the
-  states.
+- **Storage in derivative causality (follows the states):** each storage
+  element (or field port) that isn't a state, written in terms of the states
+  and inputs: after a reduction, or when a source fixes it.
 - **Unable to eliminate algebraic variables:** SymPy couldn't reduce the
   system. The full equations (each `= 0`) follow so you can see what's left.
   `--show-equations` always prints them.
@@ -530,6 +593,63 @@ zero):
   longer one is upright (`q_C1` → q<sub>C1</sub>, `R_on` → R<sub>on</sub>).
   Greek names (`rho`, `omega_n`) become Greek letters.
 
+### Variables and the linear approximation
+
+`--variables` picks how the equations are written. It works with or without
+`--latex`, and the editor's **Equations** window has the same choices.
+
+- **`energy`** (the default): the states are the energy variables, momenta `p`
+  and displacements `q`.
+- **`power`**: each storage element's power variable takes its state's place:
+  the effort of a C (`e_C1`, a spring force or voltage) and the flow of an I
+  (`f_m`, a velocity or current). Each state's law is inverted for it, so the
+  states are written in terms of the new variables: for the DC motor,
+  `d(f_La)/dt = (v(t) - R_a*f_La - K_t*f_J)/L_a`. A nonlinear law's inverse can
+  be unwieldy (a cubic spring's has cube roots); the linear approximation avoids
+  it. Integral outputs stay as they are.
+- **`lagrange`**: the Lagrange variables, displacements `q` and flows `f`
+  (generalized coordinates and velocities). Each I's flow takes its momentum's
+  place, and each C keeps its displacement, so only the I laws are inverted. A
+  hardening spring `e=k*q+k3*q**3` on a mass comes out in the familiar
+  `m x'' = F - b x' - k x - k3 x^3` form:
+
+  ```text
+  d(f_m)/dt = (-b*f_m - k*q_k - k3*q_k**3 + F(t))/m
+  d(q_k)/dt = f_m
+  ```
+
+In power and Lagrange variables, a variable can depend on an input as well as
+the states, when a source drives storage in derivative causality that it reads:
+a voltage source across one port of a C-field fixes that port's charge, and so
+the force at its other port. Its equation then has the input's rate of change
+(`v˙`, or `\dot{v}` in LaTeX), by the chain rule, and in matrix form that rate
+is one more entry of `u`.
+
+`--linearize` replaces a nonlinear model by its Jacobian linearization about an
+operating point `(x‾, u‾)`, written `\bar{x}` in LaTeX. Everything is then a
+deviation from that point, `δx`, `δu` and `δy`, so `dδx/dt = A δx + B δu` with
+`A` and `B` evaluated there. It also prints the state derivatives at the
+operating point: setting each to zero gives the equilibrium to linearize about.
+For a hardening spring `e=k*q+k3*q**3`:
+
+```text
+Linear approximation about an operating point (x‾, u‾); the state derivatives there, each 0 at an equilibrium:
+  F‾ - b*p_m‾/m - k*q_k‾ - k3*q_k‾**3 = 0
+  p_m‾/m = 0
+
+States (deviations):
+  δp_m, δq_k
+
+State equations:
+  d(δp_m)/dt = -b*δp_m/m + δF + δq_k*(-k - 3*k3*q_k‾**2)
+  d(δq_k)/dt = δp_m/m
+```
+
+The linear approximation combines with either other choice: `--linearize
+--variables lagrange` gives `d(δf_m)/dt = -b*δf_m/m + δF/m + δq_k*(-k -
+3*k3*q_k‾**2)/m`. A linear model is its own linear approximation, so
+`--linearize` leaves it as it is.
+
 The [editor](../ui/index.html)'s **Equations** window shows the same output.
 
 ## 11. Errors and troubleshooting
@@ -547,6 +667,11 @@ The [editor](../ui/index.html)'s **Equations** window shows the same output.
 | `line N: bad attachment '...'` | Junction member isn't `Name`, `Name.1`/`Name.2`, optionally followed by `+`/`-`. |
 | `junction J: unknown element X` | `X` is attached but never declared with `element`. |
 | `two-port X needs .1 or .2` | A TF/GY is attached in a junction list without a port. |
+| `field X needs a port number, like X.1` | A field is attached without a port number. |
+| `element X: port N isn't attached` | A field's ports skip a number; number them 1, 2, 3, ... |
+| `Cfield takes a law per port, like e1=, q1=` | A field law's key isn't a letter it takes followed by a port number. |
+| `element X: port N needs a law` / `has two laws` / `has a law for port N` | Give each attached port exactly one law. |
+| `element X: the law for port N uses q3, which isn't one of its variables` | A field law names a port it doesn't have, or the wrong state letter (`p` on a C port). |
 | `one-port X cannot have a port suffix` | `.1`/`.2` used on a one-port element. |
 | `element X.N attached twice` | The same port appears in two junctions (or twice in one). |
 | `element X: needs N attached port(s)` | Element declared but not connected, or a TF/GY with only one port attached. |
@@ -574,6 +699,11 @@ element <name> GY n=<expr>            # e1 = n f2,  e2 = n f1
 
 connect <TF|GY name> <junction for port 1> <junction for port 2>   # power flows 1 -> 2
 
+element <name> Cfield e1=<expr> q2=<expr> ...   # a law per port, attached as <name>.1, <name>.2, ...
+element <name> Ifield f1=<expr> p2=<expr> ...   # in field laws: e1, f1, q1/p1, e2, ... are its own variables
+element <name> Rfield e1=<expr> f2=<expr> ...
+element <name> ICfield e1=<expr> f2=<expr> ...  # e or q: C port (state q); f or p: I port (state p)
+
 output <name> = <expression>          # solved in terms of the states and inputs; spaces allowed
 ```
 
@@ -581,5 +711,19 @@ Working examples are in [`examples/`](../examples):
 
 - `rc.bond`: RC circuit driven by a current source.
 - `dc_motor.bond`: armature-controlled DC motor, using a gyrator.
+- `car_pitch.bond`: a car's bounce and pitch, with the body as an I-field.
+- `pendulum.bond`: gravity as a nonlinear C (`e=m*g*L*sin(q)`); linearize it about
+  the bottom and the top.
+- `two_tanks.bond`: interacting tanks with square-root orifice laws, written
+  `Piecewise` so they work both ways round.
+- `mems_actuator.bond`: an electrostatic actuator, one C-field for its charge and
+  its plate, which pulls in above a critical voltage.
+- `coupled_coils.bond`: a transformer, an I-field with mutual inductance.
+- `maglev.bond`: magnetic levitation, an IC-field electromagnet held stable by
+  a PD law written into its voltage source (a source that reads the states).
+- `quarter_car.bond`: a quarter car over a road bump, with a piecewise bump stop
+  and integral outputs.
+
+Those with a `#@title` line are also the editor's advanced examples.
 - `piecewise_leak.bond`: tank with a piecewise, state-dependent outlet
   resistance.

@@ -59,10 +59,20 @@
       try {
         py.globals.set("bond_text", data.bond);
         py.globals.set("integral_json", JSON.stringify(data.integral));
+        py.globals.set("view_json", JSON.stringify(data.view));
+        // The solve (derive_system) is the slow part, so the last one is kept for
+        // other views of the same graph; power and Lagrange variables need one that solved for them.
         const out = py.runPython(
           "import json, bondgraph as bg\n" +
-          "_m = bg.parse_text(bond_text)\n" +
-          "json.dumps(bg.latex_report(_m, bg.storage_causality(_m, json.loads(integral_json))))");
+          "_view = json.loads(view_json)\n" +
+          "_power = _view['variables'] != 'energy'\n" +
+          "if globals().get('_key') != (bond_text, integral_json) or (_power and _system['power'] is None):\n" +
+          "    _key = None\n" +
+          "    _m = bg.parse_text(bond_text)\n" +
+          "    _c = bg.storage_causality(_m, json.loads(integral_json))\n" +
+          "    _system = bg.derive_system(_m, _c, _power)\n" +
+          "    _key = (bond_text, integral_json)\n" +
+          "json.dumps(bg.latex_report(_m, _c, _view['variables'], _view['linearize'], _system))");
         post({ type: "result", id: data.id, result: JSON.parse(out) });
       } catch (err) {
         // A PythonError carries the traceback; its last line is "ValueError: message".
@@ -106,9 +116,10 @@
       worker.postMessage(Object.assign({ type: "solve" }, req));
     }
     return {
-      solve(bond, integral, callback) {
+      // view: { variables: "energy" | "power" | "lagrange", linearize: boolean }
+      solve(bond, integral, view, callback) {
         done = callback;
-        const req = { id: ++latest, bond, integral };
+        const req = { id: ++latest, bond, integral, view };
         if (!root.BONDGRAPH_PY) { callback({ error: "bondgraph-py.js is missing. Run: node ui/embed-python.js", fatal: true }); return; }
         if (running && Date.now() - running.since > STUCK_MS) stop();
         if (!worker) start();

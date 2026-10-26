@@ -15,6 +15,10 @@ Use `--json` for machine-readable output.  `--show-equations` also prints the
 complete constitutive/junction system used to obtain the result.  `--latex`
 prints the state equations as LaTeX, one per state; `--latex=matrix` prints
 them as `ẋ = A x + B u`, with each source's value as an entry of `u`.
+`--variables power` writes the states as power variables (each storage
+element's effort or flow) and `--variables lagrange` as Lagrange variables
+(displacements `q` and flows `f`); `--linearize` shows a nonlinear model's linear approximation about an operating
+point.
 
 ## Editor
 
@@ -25,6 +29,12 @@ needed) to draw a bond graph instead of typing it:
   `E` Se, `F` Sf, `C`, `I`, `R`, `T` TF, `G` GY, `0`, `1`) and click to place it.
   Switch to **Bond** (`B`), or hold Shift, and drag from one node to another.
   Power flows the way you drag.
+- **Multiport fields:** **Field** (`M`) places a C-field; its popover switches
+  it to an I-, R- or IC-field.  Each bond to it is a port, numbered in the order
+  you add them, with its own law (`e1 = ...`, `p2 = ...`) and its own causality.
+  **Common laws** fills in a symmetric stiffness, compliance, inertia,
+  resistance or conductance matrix.  Deleting a port's bond renumbers the ports
+  after it, and the names that refer to them.
 - **Causality:** strokes update as you draw.  Storage elements in integral
   causality are green with an `∫` badge, derivative causality is amber
   (`d/dt`), and causal conflicts are red.
@@ -52,7 +62,12 @@ needed) to draw a bond graph instead of typing it:
   `bondgraph.py --latex` prints, using the causality drawn in the editor.  The
   first time it opens it downloads about 11 MB, so that needs an internet
   connection; after that the browser's cache serves it.  Drag the window by
-  its title and resize it from its corner.
+  its title and resize it from its corner.  **Energy**, **Power** and
+  **Lagrange** choose the state variables: momenta `p` and displacements `q`;
+  each storage element's effort or flow; or displacements `q` and flows `f`.
+  For a nonlinear
+  model, **Linear approximation** shows its linearization about an operating
+  point, in any of the three.
 - **Files:** **Export .bond** produces a file this CLI reads; **Import .bond**
   opens one (layout is kept in `#@` comment lines the CLI ignores).
 
@@ -61,6 +76,15 @@ window runs an embedded copy of `bondgraph.py` (`ui/bondgraph-py.js`, since a
 page opened from disk can't read the `.py` file).  After changing
 `bondgraph.py`, run `node ui/embed-python.js` to refresh the copy; the engine
 tests fail until you do.
+
+**Load an example** has the basics built in, and an **Advanced** group: a
+pendulum to linearize, an electrostatic actuator (a C-field) with pull-in, a
+transformer (an I-field), magnetic levitation under PD control (an IC-field),
+a quarter car over a bump with a piecewise bump stop, and two tanks with
+square-root orifices.  Those are the `examples/*.bond` files with a `#@title`
+line; each file explains its model in its opening comments, and the CLI reads it
+too.  After changing one, run `node ui/embed-examples.js`, which copies them into
+`ui/examples.js`; the engine tests fail until you do.
 
 ## `.bond` format
 
@@ -124,6 +148,16 @@ output P_R = e_R1 * f_R1
 
 An output written `integral(expr)` is a new state, the integral of `expr` from
 zero, such as `output q_L = integral(f_L1)`.  Outputs may use each other's names.
+
+Multiport fields (`Cfield`, `Ifield`, `Rfield`, `ICfield`) take any number of
+ports, attached by number like a two-port's, and a law per port keyed by the
+variable it sets: `e1=`/`q1=` for a C-field, `f1=`/`p1=` for an I-field,
+`e1=`/`f1=` for an R-field.  In the laws, `e1`, `f1`, `q1`/`p1`, `e2`, ... are the
+field's own variables, so a linear C-field is its stiffness matrix row by row:
+
+```text
+element S Cfield e1=k1*q1+k12*(q1-q2) e2=k2*q2+k12*(q2-q1)
+```
 
 ### Conventions and scope
 
